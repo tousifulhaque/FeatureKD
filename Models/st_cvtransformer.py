@@ -125,7 +125,7 @@ class MMTransformer(nn.Module):
                                           nn.ReLU() )
         
         self.transform = nn.Sequential(
-                            nn.Linear(16, 32),
+                            nn.Linear(1, 32),
                             nn.ReLU())
         
     

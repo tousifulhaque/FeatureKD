@@ -65,7 +65,7 @@ def get_args():
     #teacher model
     parser.add_argument('--teacher-model' ,default= None, help = 'Name of teacher model to load')
     parser.add_argument('--teacher-args', default= str, help = 'A dictionary for teacher args')
-    parser.add_argument('--teacher-weight', type = str, default="/home/bgu9/LightHART/exps/smartfall_fall_wokd/teacher/skeleton_with_experimental/spTransformer", help= 'weight for teacher')
+    parser.add_argument('--teacher-weight', type = str, default="/home/bgu9/LightHART/exps/upfall_fall_wokd/teacher/skeleton_with_experimental_new_2025-07-28_21-45-38/spTransformer", help= 'weight for teacher')
 
     #student model 
     parser.add_argument('--model', default = None , help = 'Name of the student model to load' )
@@ -217,7 +217,8 @@ class Distiller(Trainer):
         if self.arg.phase == 'train':
                                             
                 results = self.create_df()
-                for i in range(len(self.arg.subjects[:-3])): 
+                for i in range(len(self.arg.subjects)): 
+                    print(self.arg.subjects)
                     self.train_loss_summary = []
                     self.val_loss_summary = []
                     self.best_loss = float('inf')
@@ -227,7 +228,7 @@ class Distiller(Trainer):
                     self.best_accuracy = float('-inf')
                     test_subject = self.arg.subjects[i]
                     train_subjects = list(filter(lambda x : x not in [test_subject], self.arg.subjects))
-                    self.val_subject = [35,46]
+                    self.val_subject = [7,9]
                     self.test_subject = [test_subject]
                     self.train_subjects = train_subjects
  

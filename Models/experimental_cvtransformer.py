@@ -65,7 +65,7 @@ class MMTransformer(nn.Module):
         tdpr = [x.item() for x in torch.linspace(0, drop_path_rate, self.tdepth)]
 
         self.Spatial_encoder = nn.Sequential(
-            nn.Conv1d(16, self.skl_encoder_size, 3, 1, 1,), 
+            nn.Conv1d(1, self.skl_encoder_size, 3, 1, 1,), 
             nn.BatchNorm1d((self.skl_encoder_size)), 
             nn.ReLU(), 
             # nn.Conv1d(self.skl_encoder_size ,self.skl_encoder_size , 3, 1, 1),

@@ -1,8 +1,9 @@
-from typing import List, Dict
+from typing import List, Dict, Tuple
 import os
+import re 
 import numpy as np
 import pandas as pd
-from utils.loader  import DatasetBuilder
+from utils.loader  import DatasetBuilder, UpfallBuilder
 from sklearn.preprocessing import StandardScaler
 
 SAMPLING_RATE = 200  # Hz (samples per second)
@@ -328,7 +329,110 @@ class SmartFallMM:
         self.match_trials()
 
 
+class Upfall: 
+    def __init__(self, root_dir: str) -> None:
+        self.root_dir = root_dir
+        self.modalities= {}
+        self.required_modalities = []
+        self.matched_trials: List[MatchedTrial] = []  # Stores the selected sensor for each modality (e.g., accelerometer)
 
+    def add_modality(self, modality_name: str) -> None:
+        """
+        Adds a modality to the dataset for a specific age group.
+
+        Args:
+            age_group (str): Either 'old' or 'young'.
+            modality_name (str): Name of the modality (e.g., accelerometer, gyroscope, skeleton).
+        """
+        
+        self.modalities[modality_name] = Modality(modality_name)
+        self.required_modalities.append(modality_name)
+    def get_acitivity_info(self, name : str) -> Tuple[int]:
+        match = re.match(r"Subject(\d+)Activity(\d+)Trial(\d+).*", name)
+        subject_id = int(match.group(1))
+        activity_id = int(match.group(2))
+        trial_id = int(match.group(3))
+        return subject_id, activity_id, trial_id
+
+    def load_files(self) -> None:
+        """
+        Loads files from the dataset based on selected sensors and age groups.
+        Skeleton data is loaded without sensor selection.
+        """
+        for modality_name, modality in self.modalities.items():
+                # Handle skeleton data (no sensor required)
+                modality_dir = os.path.join(self.root_dir, modality_name)
+
+
+                # Load the files
+                if os.path.exists(modality_dir):
+
+                    for root, _, files in os.walk(modality_dir):
+                        for file in files:
+                            try :
+                                # Extract information based on the filename
+                                subject_id, action_id, sequence_number = self.get_acitivity_info(file)
+                                file_path = os.path.join(root, file)
+                                modality.add_file(subject_id, action_id, sequence_number, file_path)
+                            except:
+                                print(file)
+                else:
+                    raise FileNotFoundError(f"Modality directory not found: {modality_dir}")
+
+
+    def match_trials(self) -> None:
+        """
+        Matches files from different modalities based on subject ID, action ID, and sequence number.
+        Only trials that have matching files in all modalities will be kept in matched_trials.
+        """
+        trial_dict = {}
+
+        # Step 1: Group files by (subject_id, action_id, sequence_number)
+
+        for modality_name, modality in self.modalities.items():
+                for modality_file in modality.files:
+                    key = (modality_file.subject_id, modality_file.action_id, modality_file.sequence_number)
+
+                    if key not in trial_dict:
+                        trial_dict[key] = {}
+
+                    # Add the file under its modality name
+                    trial_dict[key][modality_name] = modality_file.file_path
+
+        # Step 2: Filter out incomplete trials
+        # Assuming all age groups have the same modalities
+
+        for key, files_dict in trial_dict.items():
+            # Check if all required modalities are present for this trial
+            if all(modality in files_dict for modality in self.required_modalities):
+                subject_id, action_id, sequence_number = key
+                matched_trial = MatchedTrial(subject_id, action_id, sequence_number)
+
+                for modality_name, file_path in files_dict.items():
+                    matched_trial.add_file(modality_name, file_path)
+
+                self.matched_trials.append(matched_trial)
+
+    def pipe_line(self,modalities: List[str]):
+        '''
+        A pipe to load the data 
+        '''
+        for modality in modalities:
+            self.add_modality(modality)
+
+        # Load files for the selected sensors and skeleton data)
+        self.load_files()
+
+        # Match trials across the modalities
+        self.match_trials()
+
+def prepare_upfall(arg)-> DatasetBuilder:
+    upfall = Upfall(root_dir=os.path.join(os.getcwd(), 'data', 'upfall'))
+    upfall.pipe_line(modalities = arg.dataset_args['modalities'])
+    builder = UpfallBuilder(dataset = upfall,  mode =arg.dataset_args['mode'], max_length=arg.dataset_args['max_length'],\
+                             task = arg.dataset_args['task'])
+    return builder
+        
 def prepare_smartfallmm(arg )  -> DatasetBuilder: 
     '''
     Function for dataset preparation
@@ -341,11 +445,11 @@ def prepare_smartfallmm(arg )  -> DatasetBuilder:
                                 arg.dataset_args['task'])
     return builder
 
-def split_by_subjects(builder, subjects, fuse) -> Dict[str, np.ndarray]:
+def split_by_subjects(builder, subjects, fuse, upsample) -> Dict[str, np.ndarray]:
     '''
     Function to Filter out expects subjects
     '''
-    builder.make_dataset(subjects, fuse)
+    builder.make_dataset(subjects, fuse, upsample)
 
     # if len(subjects) == 1 and subjects[0] in [35, 38,39,44, 46]: 
     #     builder.random_resampling()
@@ -415,5 +519,10 @@ if __name__ == "__main__":
 #         # load files only that matches 
 #     # merge all together
 #     # create labels
-    (X_train, y_train), (X_test, y_test) = load_sisfall()
-    print(X_train.shape)
+######### sisfall loader test ############
+    # (X_train, y_train), (X_test, y_test) = load_sisfall()
+    # print(X_train.shape)
+######### upfall loader test ########
+   builder =  prepare_upfall()
+   data = split_by_subjects(builder=builder, subjects=list(range(1, 18)), fuse = False)
+   print(data)

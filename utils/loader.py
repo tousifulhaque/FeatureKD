@@ -2,6 +2,8 @@
 Dataset Builder
 '''
 import os
+import math
+import random
 from typing import List, Dict, Tuple
 from collections import defaultdict, Counter
 import numpy as np
@@ -24,22 +26,54 @@ import torch
 import torch.nn.functional as F
 from utils.processor.base import Processor
 
+JOINT_ID = 13
+
+ACC_COL_NUM = 29 # -3 for smartfallmm # 29 for upfall
+
+# def csvloader(file_path: str, **kwargs):
+#     '''
+#     Loads csv data
+#     '''
+#     file_data = pd.read_csv(file_path, index_col=False, header = 0).dropna().bfill()
+#     # num_col = file_data.shape[1]
+#     # num_extra_col = num_col % 
+#     # cols_to_select = num_col - num_extra_col
+#     if 'skeleton' in file_path: 
+#         cols = 96
+#     else: 
+#         cols  = 3
+#     activity_data = file_data.iloc[2:, -cols:].to_numpy(dtype=np.float32)
+#     return activity_data
+def csvloader(file_path:str, **kwargs):
+    with open(file_path) as f : 
+        header1 = f.readline().strip().split(',')
+        header2 = f.readline().strip().split(',')
+        max_len = max(len(header1), len(header2))
+        df = pd.read_csv(file_path, skiprows=2)
+        max_len = df.shape[1]
+        header1 += ['']*(max_len - len(header1))
+        header2 += ['']*(max_len - len(header2))
+
+    multi_col = pd.MultiIndex.from_arrays([header1, header2])
+    df.columns = multi_col
+    cols_df = pd.DataFrame(df.columns.tolist())
+    cols_df.replace('', pd.NA, inplace=True)
+    cols_df.fillna(method = 'ffill', inplace= True)
+    df.columns = pd.MultiIndex.from_frame(cols_df)
+    cols_to_find = [
+    ('WristAccelerometer', 'x-axis (g)'),
+    ('WristAccelerometer', 'y-axis (g)'),
+    ('WristAccelerometer', 'z-axis (g)')
+]
+
+    # Filter columns from the DataFrame
+    wrist_accel_df = df[cols_to_find]
+    return wrist_accel_df.values
 
 
-def csvloader(file_path: str, **kwargs):
-    '''
-    Loads csv data
-    '''
-    file_data = pd.read_csv(file_path, index_col=False, header = 0).dropna().bfill()
-    # num_col = file_data.shape[1]
-    # num_extra_col = num_col % 
-    # cols_to_select = num_col - num_extra_col
-    if 'skeleton' in file_path: 
-        cols = 96
-    else: 
-        cols  = 3
-    activity_data = file_data.iloc[2:, -cols:].to_numpy(dtype=np.float32)
-    return activity_data
+def npzloader(file_path:str, **kwargs):
+    file_data = np.load(file=file_path)['reconstruction']
+    return np.squeeze(file_data, axis = 0).reshape(file_data.shape[1], -1)
 
 def matloader(file_path: str, **kwargs):
     '''
@@ -52,7 +86,8 @@ def matloader(file_path: str, **kwargs):
 
 LOADER_MAP = {
     'csv' : csvloader, 
-    'mat' : matloader
+    'mat' : matloader,
+    'npz': npzloader
 }
 
 def avg_pool(sequence : np.array, window_size : int = 5, stride :int =1, 
@@ -195,7 +230,7 @@ def filter_repeated_ids(path : List[Tuple[int, int]]) -> Tuple[set, set]:
             seen_first.add(first)
             seen_second.add(second)
     
-    return seen_first, seen_second
+    return sorted(seen_first), sorted(seen_second)
 
 def align_sequence(data : Dict[str, np.ndarray] ) -> Dict[str, np.ndarray]: 
     '''
@@ -204,7 +239,8 @@ def align_sequence(data : Dict[str, np.ndarray] ) -> Dict[str, np.ndarray]:
         dataset: Dictionary containing skeleton and accelerometer data
 
     '''
-    joint_id = 9
+    #joint_id = 9
+    joint_id = JOINT_ID
     #skeleton_before_dtw =  data['skeleton'][idx][:, (joint_id -1) * 3 : joint_id * 3 ]
     #seperating left wrist joint data
     dynamic_keys = sorted([key for key in data.keys() if key != "skeleton"])
@@ -286,7 +322,7 @@ class DatasetBuilder:
 
         file_type = file_path.split('.')[-1]
 
-        assert file_type in ['csv', 'mat'], f'Unsupported file type {file_type}'
+        assert file_type in ['csv', 'mat', 'npz'], f'Unsupported file type {file_type}'
 
         return LOADER_MAP[file_type]
     
@@ -311,7 +347,7 @@ class DatasetBuilder:
             #     peaks , _ = find_peaks(sqrt_sum, height=15, distance=15)
 
             # data = selective_sliding_window(data, window_size= self.max_length,peaks = peaks, label = label, fuse = self.fuse)
-            data = sliding_window(data, self.max_length-1, data['skeleton'].shape[0], self.max_length, 32, label)
+            data = sliding_window(data, self.max_length-1, data['skeleton'].shape[0], self.max_length, 4, label)
         return data
 
     def _add_trial_data(self, trial_data):
@@ -469,3 +505,123 @@ class DatasetBuilder:
                 self.data[key] = norm_data.reshape(num_samples, length, -1)
         return self.data
     
+
+
+class UpfallBuilder(DatasetBuilder):
+    def __init__(self, dataset, mode, max_length, task='fd', **kwargs):
+        super().__init__(dataset, mode, max_length, task, **kwargs)
+    
+    def make_dataset(self, subjects : List[int], fuse : bool, upsample: bool): 
+        '''
+        Reads all the files and makes a numpy  array with all data
+        '''
+        self.data = defaultdict(list)
+        self.fuse = fuse
+        self.processed_data : Dict[str, List[np.array]] = {'labels':[]}
+        count = 0 
+        for trial in self.dataset.matched_trials:
+            if trial.subject_id in subjects:       
+                if self.task == 'fd': 
+                    label = int(trial.action_id < 6)
+                else:
+                    label = trial.action_id - 1
+                #self.data['labels'] = self.data.get('labels',[])
+                trial_data = defaultdict(np.ndarray)
+                
+                for modality, file_path in trial.files.items():
+                    #here we need the processor class 
+                    keys = self.kwargs.get('keys', None)
+                    key = None
+                    if keys:
+                        key = keys[modality.lower()]
+                    #processor = Processor(file_path, self.mode, self.max_length,label, key = key)
+                    try: 
+                        executed  = True
+                        unimodal_data = self.load_file(file_path)
+                        if modality == 'skeleton':
+                            skeleton_duration = unimodal_data.shape[0] / 14 
+                        if modality == 'accelerometer':
+                            acc_duration = unimodal_data.shape[0] / 100
+
+                        
+                        assert len(unimodal_data) > 0 
+                        trial_data[modality] = unimodal_data
+                        # if modality == 'accelerometer':
+                        #     print(unimodal_data.shape)
+                        #     unimodal_data = butterworth_filter(unimodal_data, cutoff=7.5, fs=25)
+                        # if modality == 'accelerometer' and unimodal_data.shape[0]>250:
+                        #     trial_data[modality] = self.select_subwindow_pandas(unimodal_data)                            
+                        # if modality == 'skeleton':
+                        #     print(unimodal_data.shape)
+                    
+                    except Exception as e :
+                        
+                        executed = False
+                        print(file_path)
+                        print(e)
+                # trial_difference = self.get_size_diff(trial_data)
+                # self.store_trial_diff(trial_difference)
+                # print(f'Skeleton {skeleton_duration} : {acc_duration} Accelerometer')
+                if executed : 
+                    min_duration = min(acc_duration, skeleton_duration)
+                    if label == 0 and min_duration > 2 : 
+                        min_duration = 2
+                    start = 0
+                    if min_duration == acc_duration : 
+                        #mid_point =(skeleton_duration / 2) * 18 
+                        # start = int(mid_point - (min_duration / 2)*18)
+                        end = int(min_duration * 14)
+                        #end = int(mid_point + (min_duration / 2)*18)
+                        trial_data['skeleton'] = trial_data['skeleton'][start:end, :]
+                    else:
+                        #mid_point = (acc_duration / 2)*100
+                        #start = int(mid_point - (min_duration / 2)*100)
+                        #end = int(mid_point + (min_duration / 2)*100)
+                        end = int(min_duration * 100)
+                        trial_data['accelerometer'] = trial_data['accelerometer'][start:end, :]
+                    trial_data['accelerometer'] = trial_data['accelerometer'][::7, :] #downsample accelerometer data
+                    trial_data['skeleton'] = trial_data['skeleton'][:trial_data['accelerometer'].shape[0], :] #downsample skeleton data
+                    # print(f'Skeleton {trial_data["skeleton"].shape} : Accelerometer {trial_data["accelerometer"].shape}')
+                    #trial_data = align_sequence(trial_data)
+                        # os.remove(file_path)
+                    trial_data = self.process(trial_data, label)
+                    #print(trial_data['skeleton'][0].shape)
+                    if self._len_check(trial_data):
+                        #if label == 1  and upsample: 
+                            # self._add_trial_data(trial_data)
+                            # for i in range(10):
+                            #     noise_level = 0.01
+                            #     jittered_data = {}
+                            #     for modality, modality_data in trial_data.items():
+                            #             noise = np.random.normal(0, noise_level, modality_data.shape)
+                            #             jittered_data[modality] = modality_data + noise
+
+                            #     self._add_trial_data(jittered_data)
+                        # else: 
+                        self._add_trial_data(trial_data)
+                # for modality, file_path in trial_data.files.items():
+                #     window_stack = self.process(trial_data[modality])
+                #     if len(window_stack) != 0 : 
+                #         trial_data[modality] = window_stack
+                #trial_data['labels'].append(np.repeat(label,len(window_stack)))
+                
+                # for modality, file_path in trial.files.items():
+                #     processor = Processor(file_path, self.mode, self.max_length, label,  key = key)
+                #     processor.set_input_shape(self.data[modality][count-1])
+                #     window_stack = processor.process(self.data[modality][count-1])
+                #     if len(window_stack) != 0 :
+                #         self.processed_data[modality] = self.processed_data.get(modality, [])
+                #         self.processed_data[modality].append(window_stack)
+                # #if processor.input_shape[0] >= self.max_length:
+                #         self.processed_data['labels'].append(np.repeat(label,len(window_stack)))
+
+                    #print(self.data['skeleton'][1].shape)
+                #print(count)
+                #count +=1
+        #self.viz_trial_diff()
+        for key in self.data:
+            #print(key)
+            #print(len(self.processed_data[key]))
+            self.data[key] = np.concatenate(self.data[key], axis=0)
+        # if len(self.data['skeleton']) > 0: 
+        #     self.random_resampling()

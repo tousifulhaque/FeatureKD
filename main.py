@@ -29,7 +29,7 @@ import matplotlib.pyplot as plt
 from sklearn.metrics import confusion_matrix, f1_score, accuracy_score, precision_score, recall_score, roc_auc_score
 
 #local import 
-from utils.dataset import prepare_smartfallmm, split_by_subjects
+from utils.dataset import prepare_smartfallmm, prepare_upfall, split_by_subjects
 from utils.callbacks import EarlyStopping
 from utils.loss import BinaryFocalLoss
 
@@ -237,6 +237,7 @@ class Trainer():
         '''
         #self.criterion = torch.nn.CrossEntropyLoss()
         self.criterion = torch.nn.BCEWithLogitsLoss(pos_weight=self.pos_weights)
+        #self.criterion = BinaryFocalLoss(alpha = 0.75)
         # alpha = 1/self.pos_weights.item()
         #self.criterion = BinaryFocalLoss(alpha = 0.75)
     
@@ -295,10 +296,11 @@ class Trainer():
             # if self.arg.dataset == 'smartfallmm':
 
             # dataset class for futher processing
-            builder = prepare_smartfallmm(self.arg)
+            #builder = prepare_smartfallmm(self.arg)
+            builder = prepare_upfall(self.arg)
 
-            self.norm_train = split_by_subjects(builder, self.train_subjects, self.fuse) 
-            self.norm_val = split_by_subjects(builder , self.val_subject, self.fuse)          # print(norm_val['skeleton'].shape)
+            self.norm_train = split_by_subjects(builder, self.train_subjects, self.fuse, upsample = True) 
+            self.norm_val = split_by_subjects(builder , self.val_subject, self.fuse, upsample = False)          # print(norm_val['skeleton'].shape)
             if self.has_empty_value(list(self.norm_val.values())):
                 return False
 
@@ -322,7 +324,7 @@ class Trainer():
                 shuffle=True,
                 num_workers=self.arg.num_worker)
             #self.distribution_viz(self.norm_val['labels'], self.arg.work_dir, 'val')
-            self.norm_test = split_by_subjects(builder , self.test_subject, self.fuse)
+            self.norm_test = split_by_subjects(builder , self.test_subject, self.fuse, upsample = False)
             if self.has_empty_value(list(self.norm_test.values())):
                     return  False
             self.data_loader['test'] = torch.utils.data.DataLoader(
@@ -566,13 +568,14 @@ class Trainer():
                 self.print_log('Parameters: \n{}\n'.format(str(vars(self.arg))))
             
                 results = self.create_df()
-                for i in range(len(self.arg.subjects[:-3])): 
+                for i in range(len(self.arg.subjects)): 
                     self.train_loss_summary = []
                     self.val_loss_summary = []
                     self.best_loss = float('inf')
                     test_subject = self.arg.subjects[i]
                     train_subjects = list(filter(lambda x : x not in [test_subject], self.arg.subjects))
-                    self.val_subject = [38,46]
+                    #self.val_subject = [38,46]
+                    self.val_subject = [7,9]
                     self.test_subject = [test_subject]
                     self.train_subjects = train_subjects
                     self.model = self.load_model(self.arg.model, self.arg.model_args)
@@ -585,9 +588,9 @@ class Trainer():
                     self.global_step = self.arg.start_epoch * len(self.data_loader['train']) / self.arg.batch_size
                     for epoch in range(self.arg.start_epoch, self.arg.num_epoch):
                         self.train(epoch)
-                        if self.early_stop.early_stop:
-                            self.early_stop = EarlyStopping(min_delta=.001)
-                            break
+                        # if self.early_stop.early_stop:
+                        #     self.early_stop = EarlyStopping(min_delta=.001)
+                        #     break
                     self.load_model(self.arg.model,self.arg.model_args)
                     self.load_weights()
                     self.model.eval()
