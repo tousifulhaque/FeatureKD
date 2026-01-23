@@ -470,7 +470,7 @@ class Trainer():
 
             timer['model'] += self.split_time()
             with torch.no_grad():
-                train_loss += loss.mean().item()
+                train_loss += loss.item()*len(targets)
                 #accuracy += (torch.argmax(predictions, 1) == targets).sum().item()
                 #print(torch.argmax(F.log_softmax(logits,dim =1), 1))
                 preds = self.cal_prediction(logits)
@@ -489,9 +489,9 @@ class Trainer():
             for k, v in timer.items()
         }
         self.print_log(
-            '\tTraining Loss: {:4f},  Acc: {:2f}%, F1 score: {:2f}%, Precision: {:2f}%, Recall: {:2f}%, AUC: {:2f}%  '.format(train_loss, accuracy, f1, precision, recall, auc_score)
+            '\tTraining Loss: {:4f} '.format(train_loss)
         )
-        self.print_log('\tTime consumption: [Data]{dataloader}, [Network]{model}'.format(**proportion))
+        #self.print_log('\tTime consumption: [Data]{dataloader}, [Network]{model}'.format(**proportion))
         val_loss = self.eval(epoch, loader_name='val', result_file=self.arg.result_file)
         self.val_loss_summary.append(val_loss)
         self.early_stop(val_loss)
@@ -524,7 +524,7 @@ class Trainer():
 
                 logits, _ = self.model(acc_data.float(), skl_data.float())
                 batch_loss = self.criterion(logits.squeeze(1), targets.float())
-                loss += batch_loss.sum().item()
+                loss += batch_loss.item()*len(targets)
                 preds = self.cal_prediction(logits)
                 label_list.extend(targets.tolist())
                 pred_list.extend(preds.tolist())
@@ -538,8 +538,9 @@ class Trainer():
 
             for i, x in enumerate(predict):
                 f_r.write(str(x) +  '==>' + str(true[i]) + '\n')
-        self.print_log('{} Loss: {:4f}. {} Acc: {:2f}% F1 score: {:2f}%, Precision: {:2f}%, Recall: {:2f}%, AUC: {:2f}%'.format(loader_name.capitalize(),loss,loader_name.capitalize(), accuracy, f1, precision, recall, auc_score))
+        
         if loader_name == 'val':
+            self.print_log('{} Loss: {:4f}'.format(loader_name.capitalize(),loss))
             if loss < self.best_loss :
                     self.best_loss = loss
                     torch.save(deepcopy(self.model.state_dict()), f'{self.model_path}_{self.test_subject[0]}.pth')
@@ -551,6 +552,7 @@ class Trainer():
             self.test_precision = precision
             self.test_recall = recall
             self.test_auc = auc_score
+            self.print_log('{} Loss: {:4f}. {} Acc: {:2f}% F1 score: {:2f}%, Precision: {:2f}%, Recall: {:2f}%, AUC: {:2f}%'.format(loader_name.capitalize(),loss,loader_name.capitalize(), accuracy, f1, precision, recall, auc_score))
         return loss       
 
     def start(self):

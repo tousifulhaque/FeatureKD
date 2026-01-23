@@ -10,14 +10,19 @@ from scipy.io import loadmat
 from scipy.spatial.distance import euclidean
 from fastdtw import fastdtw
 from numpy.linalg import norm
+
 import matplotlib.pyplot as plt
 from scipy.spatial.transform import Rotation
 from scipy.signal import butter, filtfilt
-from scipy.signal import find_peaks
-from sklearn.preprocessing import StandardScaler
 import torch
 import torch.nn.functional as F
 from utils.processor.base import Processor
+import torch
+import torch.nn.functional as F
+from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.preprocessing import StandardScaler
+JOINT_ID = 9
+STRIDE = 64
 
 
 
@@ -109,51 +114,26 @@ def sliding_window(data : np.ndarray, clearing_time_index : int, max_time : int,
     data['labels'] =  np.repeat(label, len(data['skeleton']))
     return data
 
-def quaternion_to_euler(q):
-    rot = Rotation.from_quat(q)
-    return rot.as_euler('xyz', degrees=True)
+def sliding_window_alignment(data : np.ndarray, clearing_time_index : int, max_time : int, 
+                   sub_window_size : int, stride_size : int ,label : int) -> np.ndarray:
+    '''
+    Sliding Window
+    '''
+    assert clearing_time_index >= sub_window_size - 1 , "Clearing value needs to be greater or equal to (window size - 1)"
+    start = clearing_time_index - sub_window_size + 1 
 
-def fuse_inertial_data(data, window_size): 
-    q = np.array([1, 0, 0, 0], dtype=np.float64)
-    quaterions  = []
-    length = len(data['accelerometer'])
-    madgwick = Madgwick()
-    for i in range(length): 
-        transformed_windows = []
-        for j in range(window_size): 
-            gyro_data = data['gyroscope'][i][j,:]
-            acc_data = data['accelerometer'][i][j,:]
-            q  = madgwick.updateIMU(q, acc=acc_data, gyr=gyro_data)
-            euler_angels = quaternion_to_euler(q)
-            transformed_windows.append(euler_angels)
-        quaterions.append(np.array(transformed_windows))
-    data['fused'] = quaterions
-    return data 
+    if max_time >= data.shape[0]-sub_window_size:
+        max_time = max_time - sub_window_size + 1
+        # 2510 // 100 - 1 25 #25999 1000 24000 = 24900
 
-    
+    sub_windows  = (
+        start + 
+        np.expand_dims(np.arange(sub_window_size), 0) + 
+        np.expand_dims(np.arange(max_time, step = stride_size), 0).T
+    )
 
-def selective_sliding_window(data: np.ndarray, window_size: int , peaks : list, label : int, fuse : bool) -> np.array: 
-
-    windowed_data = defaultdict(np.ndarray)
-    for modality, modality_data in data.items():
-        windows = []
-        for peak in peaks:
-            start = max(0, peak - window_size)
-            end = min(len(modality_data), start + window_size)
-            # difference = length - (end-start)
-            # if difference != 0 : 
-            #     if start == 0 : 
-            #         end = end + difference
-            #     elif 
-            if modality_data[start:end, :].shape[0] < window_size:
-                continue
-            windows.append(modality_data[start:end, :])
-        windowed_data[modality] = windows
-    if fuse and set(("accelerometer" , "gyroscope")).issubset(windowed_data): 
-        windowed_data  = fuse_inertial_data(windowed_data, window_size)
-    windowed_data['labels'] = np.repeat(label, len(windows))
-    return windowed_data
-
+    data = data[sub_windows]
+    return data
 
 def filter_data_by_ids(data : np.ndarray, ids : List[int]):
     '''
@@ -191,50 +171,130 @@ def filter_repeated_ids(path : List[Tuple[int, int]]) -> Tuple[set, set]:
             seen_second.add(second)
     
     return seen_first, seen_second
+def get_segment(attn_weights, accelerometer_raw, skeleton_raw) -> Tuple[np.ndarray, np.ndarray]:
+# get the row, column index of the maximum value in the attention weights
+# ...existing code...
 
-def align_sequence(data : Dict[str, np.ndarray] ) -> Dict[str, np.ndarray]: 
-    '''
-    Matching the skeleton and phone data using dynamic time warping 
-    Args: 
-        dataset: Dictionary containing skeleton and accelerometer data
 
+    # attn_weights: [T_acc, T_skel] or [T_q, T_k]
+    attn_np = attn_weights.detach().numpy()
+
+    # Find the indices of the maximum attention value
+    max_idx = np.unravel_index(np.argmax(attn_np, axis=None), attn_np.shape)
+    acc_idx, skel_idx = max_idx  # (row, col) = (acc, skel)
+    # get the segment of length with mi
+    window_size = min(len(accelerometer_raw)-1, len(skeleton_raw)-1)
+    if window_size % 2 == 0:
+        window_size += 1  # Ensure odd window size for symmetry
+    start_acc = max(0, acc_idx - window_size // 2)
+    if start_acc == 0:
+        end_acc = window_size
+    else:   
+        end_acc = min(attn_np.shape[1], acc_idx + window_size // 2)
+        if end_acc  == attn_np.shape[1]:
+            start_acc = end_acc - window_size
+    # create a segment of skeleton and accelerometer both having the same length and the highest attention index in it
+    start_skel = max(0, skel_idx - window_size // 2)
+    if start_skel == 0:
+        end_skel = window_size
+    else:   
+        end_skel = min(attn_np.shape[0], skel_idx + window_size // 2)
+        if end_skel  == attn_np.shape[0]:
+            start_skel = end_skel - window_size 
+
+    segment_acc = accelerometer_raw[start_acc:end_acc]
+    segment_skel = skeleton_raw[start_skel:end_skel]
+    return segment_acc, segment_skel
+
+# def align_sequence(data : Dict[str, np.ndarray] ) -> Dict[str, np.ndarray]: 
+#     '''
+#     Matching the skeleton and phone data using dynamic time warping 
+#     Args: 
+#         dataset: Dictionary containing skeleton and accelerometer data
+
+#     '''
+#     #joint_id = 9
+#     joint_id = JOINT_ID
+#     #seperating left wrist joint data
+#     dynamic_keys = sorted([key for key in data.keys() if key != "skeleton"])
+#     skeleton_joint_data = data['skeleton'][:, (joint_id -1) * 3 : joint_id * 3 ]
+#     inertial_data = data[dynamic_keys[0]]
+#     if len(dynamic_keys) > 1: 
+#         gyroscope_data = data[dynamic_keys[1]]
+#         min_len = min(inertial_data.shape[0], gyroscope_data.shape[0])
+#         inertial_data = inertial_data[:min_len, :]
+#         data[dynamic_keys[1]] = gyroscope_data[:min_len, :]
+
+#    # calcuating frobenis norm of skeleton and intertial data 
+#     skeleton_frob_norm = norm(skeleton_joint_data, axis = 1)
+#     interial_frob_norm = norm(inertial_data, axis = 1)
+    
+#     distance, path  = fastdtw(interial_frob_norm[:, np.newaxis], skeleton_frob_norm[:, np.newaxis],dist = euclidean)
+
+
+#     interial_ids ,skeleton_idx ,= filter_repeated_ids(path)
+#     data['skeleton'] = filter_data_by_ids(data['skeleton'], list(skeleton_idx))
+#     for key in dynamic_keys: 
+#         data[key]= filter_data_by_ids(data[key],list(interial_ids))
+#     #skeleton_after_dtw = data['skeleton'][idx][:, (joint_id -1) * 3 : joint_id * 3 ]
+#     #plt.plot( np.arange(skeleton_before_dtw.shape[0]),skeleton_before_dtw[..., 0], '--r',
+#              #np.arange(skeleton_after_dtw.shape[0]), skeleton_after_dtw[..., 0], '--g')
+    
+#     # plt.savefig(f'exps/comparision/comparision_before_after_dtw_{idx}.jpg')
+#     # plt.close()
+#     return data
+def align_sequence(data : Dict[str, np.ndarray] ) -> Dict[str, np.ndarray]:
     '''
-    joint_id = 9
-    #skeleton_before_dtw =  data['skeleton'][idx][:, (joint_id -1) * 3 : joint_id * 3 ]
-    #seperating left wrist joint data
+    Align skeleton and inertial data using STUMPY matrix profile
+    
+    Args:
+        data: Dictionary containing skeleton and inertial data
+    
+    Returns:
+        data: Dictionary with aligned sequences
+    '''
+    try:
+        import stumpy
+        from stumpy import core
+    except ImportError:
+        print("STUMPY not installed, skipping alignment")
+        return data
+    
+    # Get joint data (joint 9 - wrist)
+    joint_id = JOINT_ID
+    skeleton_joint_data = np.array(data['skeleton'][:, (joint_id - 1) * 3 : joint_id * 3], dtype= np.float64)
+    
+    # Get inertial data (accelerometer)
     dynamic_keys = sorted([key for key in data.keys() if key != "skeleton"])
+    inertial_data = np.array(data[dynamic_keys[0]], dtype = np.float64)
     
-    skeleton_joint_data = data['skeleton'][:, (joint_id -1) * 3 : joint_id * 3 ]
-    inertial_data = data[dynamic_keys[0]]
-    if len(dynamic_keys) > 1: 
-        gyroscope_data = data[dynamic_keys[1]]
-        min_len = min(inertial_data.shape[0], gyroscope_data.shape[0])
-        inertial_data = inertial_data[:min_len, :]
-        data[dynamic_keys[1]] = gyroscope_data[:min_len, :]
-
-   # calcuating frobenis norm of skeleton and intertial data 
-    skeleton_frob_norm = norm(skeleton_joint_data, axis = 1)
-    interial_frob_norm = norm(inertial_data, axis = 1)
+    # Calculate magnitude and z-normalize
+    mag_skeleton = core.z_norm(np.sqrt(np.sum(skeleton_joint_data**2, axis=1)))
+    mag_inertial = core.z_norm(np.sqrt(np.sum(inertial_data**2, axis=1)))
     
-    # calculating dtw of the two sequence
-    # path =  dtw.warping_path(
-    #     skeleton_frob_norm.flatten(), 
-    #     interial_frob_norm.flatten()
-    # )
+    if len(mag_skeleton) > len(mag_inertial):
+        query = mag_inertial
+        target = mag_skeleton
+        full_target = data['skeleton']
+    else:
+        query = mag_skeleton
+        target = mag_inertial
+        full_target = inertial_data
 
-    distance, path  = fastdtw(interial_frob_norm[:, np.newaxis], skeleton_frob_norm[:, np.newaxis],dist = euclidean)
+    windowed_target = sliding_window_alignment(target, clearing_time_index=len(query)-1, max_time=len(target), 
+                                    sub_window_size=len(query), stride_size=1, label=0)
+    windowed_full_target = sliding_window_alignment(full_target, clearing_time_index=len(query)-1, max_time=len(target), 
+                                    sub_window_size=len(query), stride_size=1, label=0)
 
-
-    interial_ids ,skeleton_idx ,= filter_repeated_ids(path)
-    data['skeleton'] = filter_data_by_ids(data['skeleton'], list(skeleton_idx))
-    for key in dynamic_keys: 
-        data[key]= filter_data_by_ids(data[key],list(interial_ids))
-    #skeleton_after_dtw = data['skeleton'][idx][:, (joint_id -1) * 3 : joint_id * 3 ]
-    #plt.plot( np.arange(skeleton_before_dtw.shape[0]),skeleton_before_dtw[..., 0], '--r',
-             #np.arange(skeleton_after_dtw.shape[0]), skeleton_after_dtw[..., 0], '--g')
+    query = np.expand_dims(query, axis=0) #1, len_query
+    windowed_target = windowed_target.reshape(windowed_target.shape[0], windowed_target.shape[1])
+    pairwise_similarity = cosine_similarity(query, windowed_target)
+    correlated_window = windowed_full_target[pairwise_similarity.argmax(axis = 1), :].squeeze(0)
     
-    # plt.savefig(f'exps/comparision/comparision_before_after_dtw_{idx}.jpg')
-    # plt.close()
+    if len(mag_skeleton) > len(mag_inertial):
+        data['skeleton'] = correlated_window
+    else:
+        data[dynamic_keys[0]] = correlated_window
     return data
 
 
@@ -306,7 +366,11 @@ class DatasetBuilder:
             #     peaks , _ = find_peaks(sqrt_sum, height=15, distance=15)
 
             # data = selective_sliding_window(data, window_size= self.max_length,peaks = peaks, label = label, fuse = self.fuse)
-            data = sliding_window(data, self.max_length-1, data['skeleton'].shape[0], self.max_length, 10, label)
+            if label == 1:
+                stride = 16
+            else: 
+                stride = STRIDE
+            data = sliding_window(data, self.max_length-1, data['skeleton'].shape[0], self.max_length, stride, label)
         return data
 
     def _add_trial_data(self, trial_data):
@@ -341,21 +405,6 @@ class DatasetBuilder:
         plt.ylabel("Frequency")
         plt.title("Distribution of Numbers")
         plt.savefig("Distribution.png")
-
-    def select_subwindow_pandas(self, unimodal_data):
-        n = len(unimodal_data)
-        magnitude = np.linalg.norm(unimodal_data, axis = 1)
-        df = pd.DataFrame({"values":magnitude})
-        #250
-        df["variance"] = df["values"].rolling(window=125).var()
-
-        # Get index of highest variance
-        max_idx = df["variance"].idxmax()
-
-        # Get segment
-        final_start = max(0, max_idx-100)
-        final_end = min(n, max_idx + 100)
-        return unimodal_data[final_start:final_end, :]
         #high_var_segment = df["values"].iloc[max_idx : max_idx + 200].values
 
     def make_dataset(self, subjects : List[int], fuse : bool): 
@@ -376,7 +425,7 @@ class DatasetBuilder:
                     label = trial.action_id - 1
                 #self.data['labels'] = self.data.get('labels',[])
                 trial_data = defaultdict(np.ndarray)
-                
+                executed  = True
                 for modality, file_path in trial.files.items():
                     #here we need the processor class 
                     keys = self.kwargs.get('keys', None)
@@ -385,76 +434,36 @@ class DatasetBuilder:
                         key = keys[modality.lower()]
                     #processor = Processor(file_path, self.mode, self.max_length,label, key = key)
                     try: 
-                        executed  = True
-                        #unimodal_data = butterworth_filter(processor.process(), cutoff=1.0, fs=20)
-                        #unimodal_data = processor.load_file()
+                        
                         unimodal_data = self.load_file(file_path)
-                        #print(f"Modality : { modality} , shape : {unimodal_data.shape}")
                         trial_data[modality] = unimodal_data
-                        if modality == 'accelerometer':
-                            unimodal_data = butterworth_filter(unimodal_data, cutoff=7.5, fs=25)
-                        if modality == 'accelerometer' and unimodal_data.shape[0] > 300:
-                            trial_data[modality] = self.select_subwindow_pandas(unimodal_data)
-                            
+
+                        if modality in ['accelerometer' , 'gyroscope']:
+                            trial_data[modality] = butterworth_filter(unimodal_data, cutoff=7.5, fs=25)
+                        # if modality in ['accelerometer', 'gyroscope'] and unimodal_data.shape[0]>250:
+                        #     trial_data[modality] = self.select_subwindow_pandas(unimodal_data)                            
                         # if modality == 'skeleton':
                         #     print(unimodal_data.shape)
-
+                        if not hasattr(unimodal_data, 'shape'):
+                            raise AttributeError(f"Data loaded from {file_path} (modality: {modality}) does not have a 'shape' attribute")
                     except Exception as e :
                         executed = False
-                        print(e)
+                        #print(e)
                 # trial_difference = self.get_size_diff(trial_data)
                 # self.store_trial_diff(trial_difference)
                 
                 if executed : 
-                    trial_data = align_sequence(trial_data)
-                        # os.remove(file_path)
-                    trial_data = self.process(trial_data, label)
-                    #print(trial_data['skeleton'][0].shape)
-                    if self._len_check(trial_data):
-                        self._add_trial_data(trial_data)
-                # for modality, file_path in trial_data.files.items():
-                #     window_stack = self.process(trial_data[modality])
-                #     if len(window_stack) != 0 : 
-                #         trial_data[modality] = window_stack
-                #trial_data['labels'].append(np.repeat(label,len(window_stack)))
-                
-                # for modality, file_path in trial.files.items():
-                #     processor = Processor(file_path, self.mode, self.max_length, label,  key = key)
-                #     processor.set_input_shape(self.data[modality][count-1])
-                #     window_stack = processor.process(self.data[modality][count-1])
-                #     if len(window_stack) != 0 :
-                #         self.processed_data[modality] = self.processed_data.get(modality, [])
-                #         self.processed_data[modality].append(window_stack)
-                # #if processor.input_shape[0] >= self.max_length:
-                #         self.processed_data['labels'].append(np.repeat(label,len(window_stack)))
-
-                    #print(self.data['skeleton'][1].shape)
-                #print(count)
-                #count +=1
+                    try:
+                        trial_data = align_sequence(trial_data)
+                        trial_data = self.process(trial_data, label)
+                        if self._len_check(trial_data):
+                            self._add_trial_data(trial_data)
+                    except Exception as e :
+                        pass
         #self.viz_trial_diff()
         for key in self.data:
             #print(key)
-            #print(len(self.processed_data[key]))
             self.data[key] = np.concatenate(self.data[key], axis=0)
-        # if len(self.data['skeleton']) > 0: 
-        #     self.random_resampling()
-
-    
-    def random_resampling(self):
-        ros = RandomUnderSampler(sampling_strategy='auto', random_state=42)
-        num_samples, seq_len, acc_channels = self.data['accelerometer'].shape
-        _, _ , skl_channels = self.data['skeleton'].shape
-        acc_flatten = self.data['accelerometer'].reshape(num_samples, -1)
-        skl_flatten = self.data['skeleton'].reshape(num_samples, -1)
-
-        labels = self.data['labels']
-        resampled_acc, resampled_labels = ros.fit_resample(acc_flatten,labels)
-        resampled_skl, _ = ros.fit_resample(skl_flatten, labels)
-        self.data['accelerometer'] = resampled_acc.reshape(-1, seq_len , acc_channels)
-        self.data['skeleton'] = resampled_skl.reshape(-1, seq_len, skl_channels)
-        self.data['labels'] = resampled_labels
-
-
     
     def normalization(self) -> np.ndarray:
         '''
