@@ -10,12 +10,7 @@ from scipy.io import loadmat
 from scipy.spatial.distance import euclidean
 from fastdtw import fastdtw
 from numpy.linalg import norm
-from dtaidistance import dtw
 import matplotlib.pyplot as plt
-from imblearn.over_sampling import RandomOverSampler, SMOTE
-from imblearn.combine import SMOTETomek
-from imblearn.under_sampling import RandomUnderSampler 
-from ahrs.filters import Madgwick
 from scipy.spatial.transform import Rotation
 from scipy.signal import butter, filtfilt
 from scipy.signal import find_peaks
