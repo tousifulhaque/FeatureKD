@@ -95,32 +95,16 @@ class Bmhad_mm(torch.utils.data.Dataset):
 class UTD_mm(torch.utils.data.Dataset):
     def __init__(self, dataset, batch_size):
         self.inertial_modality = next((modality for modality in dataset if modality in ['accelerometer', 'gyroscope']), None)
-        #self.acc_data = dataset[self.inertial_modality]
         self.acc_data = dataset['accelerometer']
         self.labels = dataset['labels']
         self.skl_data = dataset['skeleton']
-        #self.skl_data = np.random.randn(self.acc_data.shape[0], 32,3)
         self.num_samples = self.acc_data.shape[0]
         self.acc_seq = self.acc_data.shape[1]
         self.skl_seq, self.skl_length, self.skl_features = self.skl_data.shape
         self.skl_data = self.skl_data.reshape(self.skl_seq, self.skl_length, -1, 3)
         self.channels = self.acc_data.shape[2]
         self.batch_size = batch_size
-        self.transform = None
-        self.crop_size = 64
 
-    
-    def random_crop(self,data : torch.Tensor) -> torch.Tensor:
-        '''
-        Function to add random cropping to the data
-        Arg: 
-            data : 
-        Output: 
-            crop_data: will return croped data
-        '''
-        length = data.shape[0]
-        start_idx = np.random.randint(0, length-self.crop_size-1)
-        return data[start_idx : start_idx+self.crop_size, :]
 
     def cal_smv(self, sample : torch.Tensor) -> torch.Tensor:
         '''
@@ -132,34 +116,6 @@ class UTD_mm(torch.utils.data.Dataset):
         smv= torch.sqrt(sum_squared)
         return smv
     
-    def calculate_weight(self, sample):
-        """
-        Calculate the magnitude (weight) of accelerometer data.
-
-        Parameters:
-        - data: A PyTorch tensor of shape (128, 3) where each row is [ax, ay, az].
-
-        Returns:
-        - A 1D PyTorch tensor of shape (128,) containing the magnitude for each row.
-        """
-        mean = torch.mean(sample, dim = -2, keepdim=True)
-        zero_mean = sample - mean
-        return torch.sqrt(torch.sum(zero_mean**2, dim=-1, keepdim=True))
-    
-    def calculate_pitch(self,data):
-        """
-        Calculate the pitch from accelerometer data.
-
-        Parameters:
-        - data: A PyTorch tensor of shape (128, 3) where each row is [ax, ay, az].
-
-        Returns:
-        - A 1D PyTorch tensor of shape (128,) containing the pitch angle for each row in radians.
-        """
-        ax = data[:, 0]
-        ay = data[:, 1]
-        az = data[:, 2]
-        return torch.atan2(-ax, torch.sqrt(ay**2 + az**2)).unsqueeze(1)
     
 
     def calculate_roll(self,data):
@@ -190,9 +146,6 @@ class UTD_mm(torch.utils.data.Dataset):
         data = dict()
 
         watch_smv = self.cal_smv(acc_data)
-        watch_weight = self.calculate_weight(acc_data)
-        # watch_roll = self.calculate_roll(acc_data)
-        # watch_pitch = self.calculate_pitch(acc_data)
         acc_data = torch.cat(( watch_smv,acc_data), dim = -1)
         #data[self.inertial_modality] = acc_data
 

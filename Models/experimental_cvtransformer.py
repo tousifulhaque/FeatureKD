@@ -67,7 +67,7 @@ class MMTransformer(nn.Module):
         self.Spatial_encoder = nn.Sequential(
             nn.Conv1d(16, self.skl_encoder_size, 3, 1, 1,), 
             nn.BatchNorm1d((self.skl_encoder_size)), 
-            nn.ReLU(), 
+            nn.SiLU()
             # nn.Conv1d(self.skl_encoder_size ,self.skl_encoder_size , 3, 1, 1),
             # nn.BatchNorm1d((self.skl_encoder_size)),
             # nn.ReLU(),
@@ -119,10 +119,10 @@ class MMTransformer(nn.Module):
 
         self.spatial_conv = nn.Sequential(nn.Conv2d(in_chans, in_chans, (1, 9), 1 ),
                                           nn.BatchNorm2d(in_chans),
-                                          nn.ReLU(), 
+                                          nn.SiLU(), 
                                           nn.Conv2d(in_chans, 1, (1, 9), 1), 
                                           nn.BatchNorm2d(1),
-                                          nn.ReLU() )
+                                          nn.SiLU() )
         
         self.transform = nn.Sequential(
                             nn.Linear(16, 32),
@@ -151,7 +151,7 @@ class MMTransformer(nn.Module):
 
         else:
             x = x[:,:f,:]
-            feature = self.Temporal_norm(x)
+            feature = x
             x = rearrange(x, 'b f St -> b St f')
             x = F.avg_pool1d(x,x.shape[-1],stride=x.shape[-1]) #b x St x 1
             x = torch.reshape(x, (b,St))
@@ -183,13 +183,11 @@ class MMTransformer(nn.Module):
 
         for idx, block in enumerate(self.joint_block):
             x = block(x)
-            # if idx == 0: 
-            #     feature = x[:,:f,:]
+    
             #     #feature = rearrange(feature, 'b j f -> b f j')
             #     feature = self.Temporal_norm(feature)
                 # feature = F.avg_pool1d(feature, kernel_size=feature.shape[-1], stride=1)
                 # feature = torch.flatten(feature, 1)
-        #x = rearrange(x, 'b f c -> b c f')
 
         #Extract acc_signal from input 
         # b, f, c = acc_data.shape

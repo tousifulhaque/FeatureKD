@@ -198,7 +198,6 @@ class Trainer():
         '''
         Function to save configaration file
         ''' 
-        print(f'{desc_path}/{src_path.rpartition("/")[-1]}') 
         shutil.copy(src_path, f'{desc_path}/{src_path.rpartition("/")[-1]}')
     
     def cal_weights(self):
@@ -220,6 +219,14 @@ class Trainer():
     
     def has_empty_value(self, *lists):
         return any(len(lst) == 0 for lst in lists)
+
+    def has_all_classes(self, labels: List[int]) -> bool:
+        '''
+        Function to check if all classes are present in the labels
+        '''
+        unique_classes = set(labels)
+        return len(unique_classes) == 2  # Assuming binary classification with classes 0 and 1  
+    
     def load_model(self, model, model_args):
         '''
         Function to load model 
@@ -242,7 +249,7 @@ class Trainer():
         Load weights to the load 
         '''
 
-        self.model.load_state_dict(torch.load(f'{self.model_path}_{self.test_subject[0]}.pth'))
+        self.model.load_state_dict(torch.load(f'{self.model_path}_{self.test_subject[0]}.pth', weights_only=True))
     
     def load_optimizer(self, parameters) -> None:
         '''
@@ -296,17 +303,17 @@ class Trainer():
             # dataset class for futher processing
             builder = prepare_smartfallmm(self.arg)
 
-            self.norm_train = split_by_subjects(builder, self.train_subjects, self.fuse) 
-            self.norm_val = split_by_subjects(builder , self.val_subject, self.fuse)          # print(norm_val['skeleton'].shape)
+            self.norm_train, scalers = split_by_subjects(builder, self.train_subjects) 
+            self.norm_val, _ = split_by_subjects(builder , self.val_subject, scalers)        
             if self.has_empty_value(list(self.norm_val.values())):
                 return False
 
             #validation dataset
             self.data_loader['train'] = torch.utils.data.DataLoader(
-                dataset=Feeder(**self.arg.train_feeder_args,
+                dataset=Feeder(batch_size = self.arg.batch_size,
                                dataset = self.norm_train),
                 batch_size=self.arg.batch_size,
-                shuffle=True,
+                shuffle=False,
                 num_workers=self.arg.num_worker)
             
             self.cal_weights()
@@ -314,21 +321,18 @@ class Trainer():
             self.distribution_viz(self.norm_train['labels'], self.arg.work_dir, 'train')
             
             self.data_loader['val'] = torch.utils.data.DataLoader(
-                dataset=Feeder(**self.arg.val_feeder_args,
+                dataset=Feeder(batch_size = self.arg.val_batch_size,
                                dataset = self.norm_val
                                ),
-                batch_size=self.arg.batch_size,
-                shuffle=True,
+                batch_size=self.arg.val_batch_size,
+                shuffle= True,
                 num_workers=self.arg.num_worker)
-            #self.distribution_viz(self.norm_val['labels'], self.arg.work_dir, 'val')
-        # else:
-        #     # if self.arg.dataset == 'smartfallmm':
-        #     builder = prepare_smartfallmm(self.arg)
-            self.norm_test = split_by_subjects(builder , self.test_subject, self.fuse)
-            if self.has_empty_value(list(self.norm_test.values())):
+            self.distribution_viz(self.norm_val['labels'], self.arg.work_dir, 'val')
+            self.norm_test, _ = split_by_subjects(builder , self.test_subject, scalers)
+            if self.has_empty_value(list(self.norm_test.values())) or not self.has_all_classes(self.norm_test['labels']):
                     return  False
             self.data_loader['test'] = torch.utils.data.DataLoader(
-                dataset=Feeder(**self.arg.test_feeder_args, dataset = self.norm_test),
+                dataset=Feeder(batch_size = self.arg.test_batch_size, dataset = self.norm_test),
                 batch_size=self.arg.test_batch_size,
                 shuffle=True,
                 num_workers=self.arg.num_worker)
@@ -471,8 +475,6 @@ class Trainer():
             timer['model'] += self.split_time()
             with torch.no_grad():
                 train_loss += loss.item()*len(targets)
-                #accuracy += (torch.argmax(predictions, 1) == targets).sum().item()
-                #print(torch.argmax(F.log_softmax(logits,dim =1), 1))
                 preds = self.cal_prediction(logits)
                 label_list.extend(targets.tolist())
                 pred_list.extend(preds.tolist())
@@ -570,7 +572,7 @@ class Trainer():
                 self.print_log('Parameters: \n{}\n'.format(str(vars(self.arg))))
             
                 results = self.create_df()
-                for i in range(len(self.arg.subjects[:-3])): 
+                for i in range(len(self.arg.subjects[:-25])): 
                     self.train_loss_summary = []
                     self.val_loss_summary = []
                     self.best_loss = float('inf')

@@ -26,11 +26,18 @@ import torch.nn.functional as F
 from main import Trainer, str2bool, init_seed, import_class
 from utils.loss import DistillationLoss
 from utils.callbacks import EarlyStopping
-from Models.cross_align import CrossModalAligner
 from sklearn.metrics import f1_score, precision_score, recall_score, auc
 
-TEMPERATURE = 3
+## metric visualization 
+import wandb
+
+
+TEMPERATURE = 0.5  # CRD-style temperature for contrastive learning
 ALPHA = 0.5
+TEACHER_DIM = 64
+STUDENT_DIM = 64
+PROJECTION_DIM = 256
+BATCH_SIZE = 64
 
 
 def get_args():
@@ -117,34 +124,32 @@ class Distiller(Trainer):
     def __init__(self, arg):
         super().__init__(arg)
         self.teacher_model = self.load_model(arg.teacher_model, arg.teacher_args)
-        self.cross_aligner  = self.load_aligner()
         self.early_stop = EarlyStopping(patience=15, min_delta=.001)
-
-    
-    def load_aligner(self):
-        use_cuda = torch.cuda.is_available()
-        self.output_device = self.arg.device[0] if type(self.arg.device) is list else self.arg.device
-        return CrossModalAligner(feature_dim=arg.model_args['embed_dim']).to(f'cuda:{self.output_device}' if use_cuda else 'cpu')
-
 
     def load_teacher_weights(self):
         '''
         Load weights to the load 
         '''
-        model_weights = torch.load(f"{self.arg.teacher_weight}_{self.test_subject[0]}.pth", weights_only=False)
+        model_weights = torch.load(f"{self.arg.teacher_weight}_{self.test_subject[0]}.pth", weights_only=True)
         if isinstance(model_weights, OrderedDict):
-            self.teacher_model.load_state_dict(torch.load(f"{self.arg.teacher_weight}_{self.test_subject[0]}.pth"))
+            self.teacher_model.load_state_dict(torch.load(f"{self.arg.teacher_weight}_{self.test_subject[0]}.pth", weights_only=True))
         else:
             self.teacher_model = model_weights
 
     def load_loss(self):
         self.mse = torch.nn.MSELoss()
         self.criterion = torch.nn.BCEWithLogitsLoss(pos_weight=self.pos_weights)
-        self.distillation_loss = DistillationLoss(pos_weigths=self.pos_weights,)
-    
+        self.distillation_loss = DistillationLoss(pos_weigths=self.pos_weights)
+        #self.distillation_loss = CCKDLoss(teacher_dim=TEACHER_DIM, student_dim=STUDENT_DIM,\
+                                        #     projection_dim=PROJECTION_DIM,
+                                        #     temperature=TEMPERATURE,
+                                        #     batch_size=BATCH_SIZE,
+                                        #     device = self.output_device
+                                        # )
+                                        
 
 
-    def train(self, epoch):
+    def train(self, epoch, run):
         self.model.train()
         self.teacher_model.eval()
         self.record_time()
@@ -156,6 +161,8 @@ class Distiller(Trainer):
         pred_list = []
         accuracy = 0
         teacher_accuracy = 0
+        embedding_loss_epoch = 0
+        bce_loss_epoch = 0
         cnt = 0
         train_loss = 0
         process = tqdm(loader, ncols = 80)
@@ -167,7 +174,7 @@ class Distiller(Trainer):
             with torch.no_grad():
                 acc_data = inputs['accelerometer'].to(f'cuda:{self.output_device}' if use_cuda else 'cpu')
                 skl_data = inputs['skeleton'].to(f'cuda:{self.output_device}' if use_cuda else 'cpu')
-                targets = targets.to(f'cuda:{self.output_device}' if use_cuda else 'cpu')
+                targets = targets.float().to(f'cuda:{self.output_device}' if use_cuda else 'cpu')
             timer['dataloader'] += self.split_time()
 
             self.optimizer.zero_grad()
@@ -175,20 +182,24 @@ class Distiller(Trainer):
                 teacher_logits, teacher_features = self.teacher_model(acc_data.float(), skl_data.float())
             student_logits, student_features = self.model(acc_data.float(), skl_data.float(), epoch = epoch)
             #cross_aligned_features= self.cross_aligner(student_features = student_features, teacher_features = teacher_features)
-            target = torch.ones(teacher_features.shape[0]).to(f'cuda:{self.output_device}' if use_cuda else 'cpu')
+            #target = torch.ones(teacher_features.shape[0]).to(f'cuda:{self.output_device}' if use_cuda else 'cpu')
             if epoch % 10 == 0 and batch_idx == 0 : 
-                self.viz_feature(teacher_features=teacher_features, student_features=student_features, epoch = epoch)
-            loss = self.distillation_loss(student_logits=student_logits,
+               self.viz_feature(teacher_features=teacher_features, student_features=student_features, epoch = epoch)
+            loss, embedding_loss, bce_loss = self.distillation_loss(student_logits=student_logits,
                                           teacher_logits=teacher_logits, labels=targets, 
                                           teacher_features = teacher_features, 
-                                          student_features = student_features, 
-                                          target = target.float())
+                                          student_features = student_features)
+            # loss, embedding_loss, bce_loss = self.distillation_loss(student_features, teacher_features,
+            #                                                         student_logits, teacher_logits, targets)
+
             loss.backward()
             self.optimizer.step()
 
             timer['model'] += self.split_time()
             with torch.no_grad():
-                train_loss += loss.sum().item()
+                train_loss += loss.item()*len(targets)
+                embedding_loss_epoch += embedding_loss.item()*len(targets)
+                bce_loss_epoch += bce_loss.item()*len(targets)
                 preds = self.cal_prediction(student_logits)
                 label_list.extend(targets.tolist())
                 pred_list.extend(preds.tolist())
@@ -198,16 +209,16 @@ class Distiller(Trainer):
         train_loss /= cnt
         accuracy, f1, recall, precision, auc_score = self.cal_metrics(label_list, pred_list)
 
-        self.train_loss_summary.append(train_loss)
-        proportion = {
-            k: '{:02d}%'.format(int(round(v * 100 / sum(timer.values()))))
-            for k, v in timer.items()
-        }
+        self.train_loss_summary.append(loss.detach().cpu())
         self.print_log(
-            '\tTraining Loss: {:4f},  Acc: {:2f}%, F1 score: {:2f}%, Precision: {:2f}%, Recall: {:2f}%, AUC: {:2f}%  '.format(train_loss, accuracy, f1, precision, recall, auc_score)
+            '\tTraining Loss: {:4f}, Embedding Loss: {:4f}, BCE Loss: {:4f}'.format(train_loss, embedding_loss_epoch/cnt, bce_loss_epoch/cnt)
         )
-        self.print_log('\tTime consumption: [Data]{dataloader}, [Network]{model}'.format(**proportion))
         val_loss = self.eval(epoch, loader_name='val', result_file=self.arg.result_file)
+        run.log({
+            "epoch" : epoch + 1 , 
+            "train_loss": train_loss,
+            "val_loss" : val_loss,
+        })
         self.early_stop(val_loss=val_loss)
         self.val_loss_summary.append(val_loss)
 
@@ -217,7 +228,7 @@ class Distiller(Trainer):
         if self.arg.phase == 'train':
                                             
                 results = self.create_df()
-                for i in range(len(self.arg.subjects[:-3])): 
+                for i in range(len(self.arg.subjects[:-26])): 
                     self.train_loss_summary = []
                     self.val_loss_summary = []
                     self.best_loss = float('inf')
@@ -227,7 +238,7 @@ class Distiller(Trainer):
                     self.best_accuracy = float('-inf')
                     test_subject = self.arg.subjects[i]
                     train_subjects = list(filter(lambda x : x not in [test_subject], self.arg.subjects))
-                    self.val_subject = [35,46]
+                    self.val_subject = [38,46]
                     self.test_subject = [test_subject]
                     self.train_subjects = train_subjects
  
@@ -237,15 +248,21 @@ class Distiller(Trainer):
                         continue
                     self.load_loss()
                     self.load_optimizer(self.model.parameters())
-
+                    run = wandb.init(
+                        project = "rightfeatKD",
+                        group = "fixing_up",
+                        name = f"fold_{i+1}", 
+                        reinit=True, 
+                        mode="online"
+    
+                    )
                     self.global_step = self.arg.start_epoch * len(self.data_loader['train']) / self.arg.batch_size
                     for epoch in range(self.arg.start_epoch, self.arg.num_epoch):
-                        self.train(epoch)
+                        self.train(epoch, run)
                         if self.early_stop.early_stop:
                             self.early_stop = EarlyStopping(patience=15, min_delta=.0001)
                             break
                     self.model = self.load_model(self.arg.model,self.arg.model_args)
-                    self.cross_aligner = self.load_aligner()
                     self.load_weights()
                     self.model.eval()
                     self.print_log(f' ------------ Test Subject {self.test_subject[0]} -------')
@@ -253,6 +270,7 @@ class Distiller(Trainer):
                     self.print_log(f'Test accuracy for : {self.test_accuracy}')
                     self.print_log(f'Test F-Score: {self.test_f1}')
                     self.loss_viz(self.train_loss_summary, self.val_loss_summary)
+                    run.finish()
                     subject_result = pd.DataFrame([{'test_subject' : str(self.test_subject[0]), 
                                                 'accuracy':round(self.test_accuracy,2), 'f1_score':round(self.test_f1, 2), 'precision':round(self.test_precision, 2),
                                                 'recall' : round(self.test_recall,2), 'auc': round(self.test_auc, 2) }])

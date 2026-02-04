@@ -1,6 +1,7 @@
 from typing import List, Dict
 import os
 import numpy as np
+from sklearn.preprocessing import StandardScaler
 from utils.loader  import DatasetBuilder
 
 
@@ -332,17 +333,37 @@ def prepare_smartfallmm(arg )  -> DatasetBuilder:
                                 arg.dataset_args['task'])
     return builder
 
-def split_by_subjects(builder, subjects, fuse) -> Dict[str, np.ndarray]:
+def normalization(data : Dict[str,np.ndarray] = None, scalers = None) -> np.ndarray:
+        '''
+        Function to normalize  the data
+        '''
+        if scalers is None: 
+            scalers = {}
+        for key ,value  in data.items():        
+            if key != 'labels':
+                num_samples, length = value.shape[:2]
+                if key not in scalers :
+                    scaler = StandardScaler()
+                    norm_data = scaler.fit_transform(value.reshape(num_samples*length, -1))
+                    scalers[key] = scaler
+                else: 
+                    norm_data = scalers[key].transform(value.reshape(num_samples*length, -1))
+                data[key] = norm_data.reshape(num_samples, length, -1)
+                
+        return data, scalers
+    
+
+def split_by_subjects(builder = None, subjects = None, scalers = None) -> Dict[str, np.ndarray]:
     '''
     Function to Filter out expects subjects
     '''
-    builder.make_dataset(subjects, fuse)
+    builder.make_dataset(subjects)
 
     # if len(subjects) == 1 and subjects[0] in [35, 38,39,44, 46]: 
     #     builder.random_resampling()
-    norm_data = builder.normalization()
+    norm_data, scalers = normalization(data=builder.data, scalers = scalers)
     #norm_data = builder.data
-    return norm_data
+    return norm_data, scalers
 
 if __name__ == "__main__":
     dataset = SmartFallMM(root_dir=os.path.join(os.getcwd(), 'data/smartfallmm'))

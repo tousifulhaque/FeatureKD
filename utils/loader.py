@@ -16,7 +16,6 @@ from scipy.spatial.transform import Rotation
 from scipy.signal import butter, filtfilt
 import torch
 import torch.nn.functional as F
-from utils.processor.base import Processor
 import torch
 import torch.nn.functional as F
 from sklearn.metrics.pairwise import cosine_similarity
@@ -321,7 +320,7 @@ class DatasetBuilder:
         self.mode = mode
         self.max_length = max_length
         self.task = task
-        self.fuse = None
+
         self.diff = []
     def load_file(self, file_path):
         '''
@@ -355,17 +354,6 @@ class DatasetBuilder:
                                       input_shape=data.shape)
         
         else: 
-            # sqrt_sum = np.sqrt(np.sum(data['accelerometer']**2, axis = 1))
-            # if label == 1: 
-            #     #phone height = 25, distance = 200
-            #     #meta height = 1 distaince = 10 
-            #     peaks , _ = find_peaks(sqrt_sum, height=15, distance=10)
-                
-            # else: 
-            #     #phone height = 15, distance = 500
-            #     peaks , _ = find_peaks(sqrt_sum, height=15, distance=15)
-
-            # data = selective_sliding_window(data, window_size= self.max_length,peaks = peaks, label = label, fuse = self.fuse)
             if label == 1:
                 stride = 16
             else: 
@@ -407,12 +395,11 @@ class DatasetBuilder:
         plt.savefig("Distribution.png")
         #high_var_segment = df["values"].iloc[max_idx : max_idx + 200].values
 
-    def make_dataset(self, subjects : List[int], fuse : bool): 
+    def make_dataset(self, subjects : List[int]): 
         '''
         Reads all the files and makes a numpy  array with all data
         '''
         self.data = defaultdict(list)
-        self.fuse = fuse
         self.processed_data : Dict[str, List[np.array]] = {'labels':[]}
         count = 0 
         for trial in self.dataset.matched_trials:
@@ -436,6 +423,26 @@ class DatasetBuilder:
                     try: 
                         
                         unimodal_data = self.load_file(file_path)
+                        
+                        # Pad data if it's smaller than the window size (max_length)
+                        if hasattr(unimodal_data, 'shape') and unimodal_data.shape[0] < self.max_length and label == 1:
+                            # Determine the padding needed
+                            pad_length = self.max_length - unimodal_data.shape[0]
+                            
+                            # Create padding shape matching the data dimensions
+                            pad_shape = list(unimodal_data.shape)
+                            pad_shape[0] = pad_length
+                            
+                            # Pad with zeros or replicate last frame
+                            # Option 1: Zero padding
+                            # padding = np.zeros(pad_shape, dtype=unimodal_data.dtype)
+                            
+                            # Option 2: Replicate last frame (better for sequential data)
+                            padding = np.repeat(unimodal_data[-1:], pad_length, axis=0)
+                            
+                            # Concatenate original data with padding
+                            unimodal_data = np.concatenate([unimodal_data, padding], axis=0)
+                        
                         trial_data[modality] = unimodal_data
 
                         if modality in ['accelerometer' , 'gyroscope']:
