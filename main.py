@@ -31,6 +31,7 @@ from sklearn.metrics import confusion_matrix, f1_score, accuracy_score, precisio
 #local import 
 from utils.dataset import prepare_smartfallmm, split_by_subjects
 from utils.callbacks import EarlyStopping
+from utils.loss import BinaryFocalLoss
 
 def get_args():
     '''
@@ -242,7 +243,8 @@ class Trainer():
         Loading loss function for the models training
         '''
         #self.criterion = torch.nn.CrossEntropyLoss()
-        self.criterion = torch.nn.BCEWithLogitsLoss(pos_weight=self.pos_weights)
+        #self.criterion = torch.nn.BCEWithLogitsLoss(pos_weight=self.pos_weights)
+        self.criterion = BinaryFocalLoss(alpha = 0.7)
     
     def load_weights(self):
         '''
@@ -313,7 +315,7 @@ class Trainer():
                 dataset=Feeder(batch_size = self.arg.batch_size,
                                dataset = self.norm_train),
                 batch_size=self.arg.batch_size,
-                shuffle=False,
+                shuffle=True,
                 num_workers=self.arg.num_worker)
             
             self.cal_weights()

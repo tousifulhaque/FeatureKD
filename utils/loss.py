@@ -10,8 +10,8 @@ class DistillationLoss(nn.Module):
         super(DistillationLoss, self).__init__()
         self.temperature = temperature
         self.alpha = alpha
-        self.bce = nn.BCEWithLogitsLoss(pos_weight=pos_weigths)
-        #self.bce = BinaryFocalLoss(alpha=0.6)
+        #self.bce = nn.BCEWithLogitsLoss(pos_weight=pos_weigths)
+        self.bce = BinaryFocalLoss(alpha=0.7)
         #self.embedding_loss = nn.CosineEmbeddingLoss()
         self.embedding_loss = nn.KLDivLoss(reduction="none")
         self.epsilon = 1e-3
