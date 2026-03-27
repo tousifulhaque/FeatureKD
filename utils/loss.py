@@ -39,8 +39,8 @@ class DistillationLoss(nn.Module):
             ## Feature loss
             ##-------------
             embedding_loss = self.embedding_loss(soft_prob, soft_teacher)
-            #cosine_loss = (weights.view(-1, 1,1) * embedding_loss).mean() 
-            cosine_loss = embedding_loss.mean()
+            cosine_loss = (weights.view(-1, 1,1) * embedding_loss).mean() 
+            #cosine_loss = embedding_loss.mean()
 
 
 

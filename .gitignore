@@ -8,4 +8,6 @@ exps/
 .DS_Store
 .venv
 .vscode
+visualizations
 wandb
+data_np

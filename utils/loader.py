@@ -20,8 +20,16 @@ import torch
 import torch.nn.functional as F
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.preprocessing import StandardScaler
-JOINT_ID = 9
-STRIDE = 64
+JOINT_ID = 27
+SAMPLING_RATE = 50
+# STRIDE = 64
+STRIDE = 8
+
+#right wrist(meta wrist) = 22
+#left wrist(watch) = 9
+#pelvis (meta hip) = 0
+#left_hip = 18
+#right_hip = 27
 
 
 
@@ -242,6 +250,7 @@ def get_segment(attn_weights, accelerometer_raw, skeleton_raw) -> Tuple[np.ndarr
 #     # plt.savefig(f'exps/comparision/comparision_before_after_dtw_{idx}.jpg')
 #     # plt.close()
 #     return data
+
 def align_sequence(data : Dict[str, np.ndarray] ) -> Dict[str, np.ndarray]:
     '''
     Align skeleton and inertial data using STUMPY matrix profile
@@ -304,6 +313,44 @@ def butterworth_filter(data, cutoff, fs, order=4, filter_type='low'):
     b, a = butter(order, normal_cutoff, btype=filter_type, analog=False)
     return filtfilt(b, a, data, axis=0) 
 
+def resampling(data: np.ndarray, sampling_rate  : int = 50, target_rate: int = 30) -> np.array:
+    '''
+    Docstring for resampling
+    
+    :param data: data to resample
+    :type data: np.ndarray
+    :param sampling_rate: sampling rate of the data
+    :type sampling_rate: int
+    :param target_rate: targeted sampling rate
+    :type target_rate: int
+    :return: returns resampled data
+    :rtype: np.ndarrar
+    '''
+
+    assert data.shape[-1] == 3 , f'Input not three dimensional'
+
+    original_length = data.shape[0]
+    new_length = int(original_length * target_rate / sampling_rate)
+
+    #original and new time axes
+    original_time = np.linspace(0, original_length-1, original_length)
+    new_time = np.linspace(0, original_length-1, new_length)
+
+    #reshape and interpolate
+    original_shape = data.shape
+    data_2d = data.reshape(original_length, -1)
+
+    resampled_data = np.zeros((new_length, data_2d.shape[1]))
+    for i in range(data_2d.shape[1]):
+        resampled_data[:, i] = np.interp(new_time, original_time, data_2d[:, i])
+    
+
+    #reshape back 
+    new_shape = (new_length,) + original_shape[1:]
+    resampled_data = resampled_data.reshape(new_shape)
+
+    return resampled_data
+
 class DatasetBuilder:
     '''
     Builds a numpy file for the data and labels and 
@@ -355,7 +402,7 @@ class DatasetBuilder:
         
         else: 
             if label == 1:
-                stride = 16
+                stride = STRIDE
             else: 
                 stride = STRIDE
             data = sliding_window(data, self.max_length-1, data['skeleton'].shape[0], self.max_length, stride, label)
@@ -395,7 +442,7 @@ class DatasetBuilder:
         plt.savefig("Distribution.png")
         #high_var_segment = df["values"].iloc[max_idx : max_idx + 200].values
 
-    def make_dataset(self, subjects : List[int]): 
+    def make_dataset(self, subjects : List[int]):
         '''
         Reads all the files and makes a numpy  array with all data
         '''
@@ -403,7 +450,7 @@ class DatasetBuilder:
         self.processed_data : Dict[str, List[np.array]] = {'labels':[]}
         count = 0 
         for trial in self.dataset.matched_trials:
-            if trial.subject_id in subjects:       
+            if trial.subject_id in subjects:      
                 if self.task == 'fd': 
                     label = int(trial.action_id > 9)
                 elif self.task == 'age':
@@ -413,60 +460,62 @@ class DatasetBuilder:
                 #self.data['labels'] = self.data.get('labels',[])
                 trial_data = defaultdict(np.ndarray)
                 executed  = True
-                for modality, file_path in trial.files.items():
-                    #here we need the processor class 
-                    keys = self.kwargs.get('keys', None)
-                    key = None
-                    if keys:
-                        key = keys[modality.lower()]
-                    #processor = Processor(file_path, self.mode, self.max_length,label, key = key)
-                    try: 
-                        
-                        unimodal_data = self.load_file(file_path)
-                        
-                        # Pad data if it's smaller than the window size (max_length)
-                        if hasattr(unimodal_data, 'shape') and unimodal_data.shape[0] < self.max_length and label == 1:
-                            # Determine the padding needed
-                            pad_length = self.max_length - unimodal_data.shape[0]
+                if trial.action_id not in [3]:
+                    for modality, file_path in trial.files.items():
+                        #here we need the processor class 
+                        keys = self.kwargs.get('keys', None)
+                        key = None
+                        if keys:
+                            key = keys[modality.lower()]
+                        #processor = Processor(file_path, self.mode, self.max_length,label, key = key)
+                        try: 
                             
-                            # Create padding shape matching the data dimensions
-                            pad_shape = list(unimodal_data.shape)
-                            pad_shape[0] = pad_length
+                            unimodal_data = self.load_file(file_path)
+                            # 
+                            # Pad data if it's smaller than the window size (max_length)
+                            if hasattr(unimodal_data, 'shape') and unimodal_data.shape[0] < self.max_length and label == 1:
+                                # Determine the padding needed
+                                pad_length = self.max_length - unimodal_data.shape[0]
+                                
+                                # Create padding shape matching the data dimensions
+                                pad_shape = list(unimodal_data.shape)
+                                pad_shape[0] = pad_length
+                                
+                                # Pad with zeros or replicate last frame
+                                # Option 1: Zero padding
+                                # padding = np.zeros(pad_shape, dtype=unimodal_data.dtype)
+                                
+                                # Option 2: Replicate last frame (better for sequential data)
+                                padding = np.repeat(unimodal_data[-1:], pad_length, axis=0)
+                                
+                                # Concatenate original data with padding
+                                unimodal_data = np.concatenate([unimodal_data, padding], axis=0)
                             
-                            # Pad with zeros or replicate last frame
-                            # Option 1: Zero padding
-                            # padding = np.zeros(pad_shape, dtype=unimodal_data.dtype)
-                            
-                            # Option 2: Replicate last frame (better for sequential data)
-                            padding = np.repeat(unimodal_data[-1:], pad_length, axis=0)
-                            
-                            # Concatenate original data with padding
-                            unimodal_data = np.concatenate([unimodal_data, padding], axis=0)
-                        
-                        trial_data[modality] = unimodal_data
+                            trial_data[modality] = unimodal_data
 
-                        if modality in ['accelerometer' , 'gyroscope']:
-                            trial_data[modality] = butterworth_filter(unimodal_data, cutoff=7.5, fs=25)
-                        # if modality in ['accelerometer', 'gyroscope'] and unimodal_data.shape[0]>250:
-                        #     trial_data[modality] = self.select_subwindow_pandas(unimodal_data)                            
-                        # if modality == 'skeleton':
-                        #     print(unimodal_data.shape)
-                        if not hasattr(unimodal_data, 'shape'):
-                            raise AttributeError(f"Data loaded from {file_path} (modality: {modality}) does not have a 'shape' attribute")
-                    except Exception as e :
-                        executed = False
-                        #print(e)
-                # trial_difference = self.get_size_diff(trial_data)
-                # self.store_trial_diff(trial_difference)
-                
-                if executed : 
-                    try:
-                        trial_data = align_sequence(trial_data)
-                        trial_data = self.process(trial_data, label)
-                        if self._len_check(trial_data):
-                            self._add_trial_data(trial_data)
-                    except Exception as e :
-                        pass
+                            # if modality in ['accelerometer' , 'gyroscope']:
+                                #resampled_data = resampling(trial_data[modality], sampling_rate=SAMPLING_RATE, target_rate=30)
+                                # trial_data[modality] = butterworth_filter(trial_data[modality], cutoff=7.5, fs=32)
+                            # if modality in ['accelerometer', 'gyroscope'] and unimodal_data.shape[0]>250:
+                            #     trial_data[modality] = self.select_subwindow_pandas(unimodal_data)                            
+                            # if modality == 'skeleton':
+                            #     print(unimodal_data.shape)
+                            if not hasattr(unimodal_data, 'shape'):
+                                raise AttributeError(f"Data loaded from {file_path} (modality: {modality}) does not have a 'shape' attribute")
+                        except Exception as e :
+                            executed = False
+                            #print(e)
+                    # trial_difference = self.get_size_diff(trial_data)
+                    # self.store_trial_diff(trial_difference)
+                    
+                    if executed : 
+                        try:
+                            #trial_data = align_sequence(trial_data)
+                            trial_data = self.process(trial_data, label)
+                            if self._len_check(trial_data):
+                                self._add_trial_data(trial_data)
+                        except Exception as e :
+                            pass
         #self.viz_trial_diff()
         for key in self.data:
             #print(key)

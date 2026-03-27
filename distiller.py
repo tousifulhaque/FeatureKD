@@ -172,7 +172,7 @@ class Distiller(Trainer):
         for batch_idx, (inputs, targets, idx) in enumerate(process):
 
             with torch.no_grad():
-                acc_data = inputs['accelerometer'].to(f'cuda:{self.output_device}' if use_cuda else 'cpu')
+                acc_data = inputs[self.inertial_modality].to(f'cuda:{self.output_device}' if use_cuda else 'cpu')
                 skl_data = inputs['skeleton'].to(f'cuda:{self.output_device}' if use_cuda else 'cpu')
                 targets = targets.float().to(f'cuda:{self.output_device}' if use_cuda else 'cpu')
             timer['dataloader'] += self.split_time()
@@ -253,8 +253,7 @@ class Distiller(Trainer):
                         group = "fixing_up",
                         name = f"fold_{i+1}", 
                         reinit=True, 
-                        mode="online"
-    
+                        mode="online",
                     )
                     self.global_step = self.arg.start_epoch * len(self.data_loader['train']) / self.arg.batch_size
                     for epoch in range(self.arg.start_epoch, self.arg.num_epoch):
