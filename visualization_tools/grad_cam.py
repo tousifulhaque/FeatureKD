@@ -457,9 +457,9 @@ def ablation_test(model, sample, cam, top_k_percent=10):
 
 if __name__ == "__main__":
     # Paths
-    
-    weights_path = "exps/smartfall_fall_wokd/test_data/imu_all_participant_watch_round2_2026-03-24_15-58-52/ttfstudent_32.pth"
-    data_path = "data_np/test_32.npy"
+    sub_id = 29
+    weights_path = f"exps/smartfall_fall_wokd/test_data/imu_all_participant_watch_round2_2026-03-24_15-58-52/ttfstudent_{sub_id}.pth"
+    data_path = f"data_np/test_{sub_id}.npy"
     
     parser = ArgumentParser(description="Grad-CAM visualization for fall detection")
     parser.add_argument('--config', type=str, default='config/smartfallmm/test.yaml')
@@ -471,7 +471,7 @@ if __name__ == "__main__":
                         help='Model type: cnn or transformer')
     parser.add_argument('--cmap', type=str, default='Reds',
                         help='Colormap (Reds, Greens, Blues, etc.)')
-    parser.add_argument('--output-dir', type=str, default='visualizations/output_gradcam_32',
+    parser.add_argument('--output-dir', type=str, default=f'visualizations/output_gradcam_{sub_id}',
                         help='Output directory for visualizations')
     parser.add_argument('--sample-idx', type=int, default=None,
                         help='Single sample index to visualize (default: all)')

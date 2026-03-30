@@ -23,6 +23,7 @@ class SimpleCNN(nn.Module):
         self.conv4 = nn.Conv1d(32, 64, kernel_size=3, padding=1)
         self.bn4 = nn.BatchNorm1d(64)
         
+        
         self.dropout = nn.Dropout(dropout)
         
         # Classifier
@@ -51,6 +52,7 @@ class SimpleCNN(nn.Module):
         
         # Layer 4
         x = F.relu(self.bn4(self.conv4(x)))
+        
         
         # Global average pooling
         x = x.mean(dim=2)  # [B, C]

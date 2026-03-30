@@ -1,6 +1,6 @@
 #!/bin/bash
 teacher_weights="spTransformer"
-student_dir="exps/smartfall_fall_wokd/test_data/imu_all_participant_watch_round2"
+student_dir="exps/smartfall_fall_wokd/test_data/imu_all_participant_watch_ws48"
 work_dir="exps/smartfall_fall_kd/test_weighted/student_with_phone_accelerometer_round1"
 student_weights="ttfstudent"
 teacher_dir="$HOME/LightHART/exps/smartfall_fall_wokd/teacher/skeleton_phone"

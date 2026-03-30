@@ -600,7 +600,7 @@ class Trainer():
                 self.print_log('Parameters: \n{}\n'.format(str(vars(self.arg))))
             
                 results = self.create_df()
-                for i in range(len(self.arg.subjects[:-25])): 
+                for i in range(len(self.arg.subjects[:-22])): 
                     self.train_loss_summary = []
                     self.val_loss_summary = []
                     self.best_loss = float('inf')

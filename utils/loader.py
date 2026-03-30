@@ -414,7 +414,7 @@ class DatasetBuilder:
             self.data[modality].append(modality_data)
     
     def _len_check(self, d):
-        return all(len(v) > 1 for v in d.values())
+        return all(len(v) > 0 for v in d.values())
 
     def get_size_diff(self, trial_data):
         return trial_data['accelerometer'].shape[0]  - trial_data['skeleton'].shape[0]
@@ -460,62 +460,58 @@ class DatasetBuilder:
                 #self.data['labels'] = self.data.get('labels',[])
                 trial_data = defaultdict(np.ndarray)
                 executed  = True
-                if trial.action_id not in [3]:
-                    for modality, file_path in trial.files.items():
-                        #here we need the processor class 
-                        keys = self.kwargs.get('keys', None)
-                        key = None
-                        if keys:
-                            key = keys[modality.lower()]
-                        #processor = Processor(file_path, self.mode, self.max_length,label, key = key)
-                        try: 
+                for modality, file_path in trial.files.items():
+                    #here we need the processor class 
+                    keys = self.kwargs.get('keys', None)
+                    key = None
+                    if keys:
+                        key = keys[modality.lower()]
+                    #processor = Processor(file_path, self.mode, self.max_length,label, key = key)
+                    try: 
+                        
+                        unimodal_data = self.load_file(file_path)
+                        if hasattr(unimodal_data, 'shape') and unimodal_data.shape[0] < self.max_length and label == 1:
+                            # Determine the padding needed
+                            pad_length = self.max_length - unimodal_data.shape[0]
                             
-                            unimodal_data = self.load_file(file_path)
-                            # 
-                            # Pad data if it's smaller than the window size (max_length)
-                            if hasattr(unimodal_data, 'shape') and unimodal_data.shape[0] < self.max_length and label == 1:
-                                # Determine the padding needed
-                                pad_length = self.max_length - unimodal_data.shape[0]
-                                
-                                # Create padding shape matching the data dimensions
-                                pad_shape = list(unimodal_data.shape)
-                                pad_shape[0] = pad_length
-                                
-                                # Pad with zeros or replicate last frame
-                                # Option 1: Zero padding
-                                # padding = np.zeros(pad_shape, dtype=unimodal_data.dtype)
-                                
-                                # Option 2: Replicate last frame (better for sequential data)
-                                padding = np.repeat(unimodal_data[-1:], pad_length, axis=0)
-                                
-                                # Concatenate original data with padding
-                                unimodal_data = np.concatenate([unimodal_data, padding], axis=0)
+                            # Create padding shape matching the data dimensions
+                            pad_shape = list(unimodal_data.shape)
+                            pad_shape[0] = pad_length
                             
-                            trial_data[modality] = unimodal_data
+                            # Pad with zeros or replicate last frame
+                            # Option 1: Zero padding
+                            # padding = np.zeros(pad_shape, dtype=unimodal_data.dtype)
+                            
+                            # Option 2: Replicate last frame (better for sequential data)
+                            padding = np.repeat(unimodal_data[-1:], pad_length, axis=0)
+                            
+                            # Concatenate original data with padding
+                            unimodal_data = np.concatenate([unimodal_data, padding], axis=0)
+                        
+                        trial_data[modality] = unimodal_data
 
-                            # if modality in ['accelerometer' , 'gyroscope']:
-                                #resampled_data = resampling(trial_data[modality], sampling_rate=SAMPLING_RATE, target_rate=30)
-                                # trial_data[modality] = butterworth_filter(trial_data[modality], cutoff=7.5, fs=32)
-                            # if modality in ['accelerometer', 'gyroscope'] and unimodal_data.shape[0]>250:
-                            #     trial_data[modality] = self.select_subwindow_pandas(unimodal_data)                            
-                            # if modality == 'skeleton':
-                            #     print(unimodal_data.shape)
-                            if not hasattr(unimodal_data, 'shape'):
-                                raise AttributeError(f"Data loaded from {file_path} (modality: {modality}) does not have a 'shape' attribute")
-                        except Exception as e :
-                            executed = False
-                            #print(e)
-                    # trial_difference = self.get_size_diff(trial_data)
-                    # self.store_trial_diff(trial_difference)
-                    
-                    if executed : 
-                        try:
-                            #trial_data = align_sequence(trial_data)
-                            trial_data = self.process(trial_data, label)
-                            if self._len_check(trial_data):
-                                self._add_trial_data(trial_data)
-                        except Exception as e :
-                            pass
+                        # if modality in ['accelerometer' , 'gyroscope']:
+                            #resampled_data = resampling(trial_data[modality], sampling_rate=SAMPLING_RATE, target_rate=30)
+                            # trial_data[modality] = butterworth_filter(trial_data[modality], cutoff=7.5, fs=32)
+                        # if modality in ['accelerometer', 'gyroscope'] and unimodal_data.shape[0]>250:
+                        #     trial_data[modality] = self.select_subwindow_pandas(unimodal_data)                            
+                        # if modality == 'skeleton':
+                        #     print(unimodal_data.shape)
+                        if not hasattr(unimodal_data, 'shape'):
+                            raise AttributeError(f"Data loaded from {file_path} (modality: {modality}) does not have a 'shape' attribute")
+                    except Exception as e :
+                        executed = False
+                        #print(e)
+                # trial_difference = self.get_size_diff(trial_data)
+                # self.store_trial_diff(trial_difference)
+                if executed : 
+                    try:
+                        #trial_data = align_sequence(trial_data)
+                        trial_data = self.process(trial_data, label)
+                        if self._len_check(trial_data):
+                            self._add_trial_data(trial_data)
+                    except Exception as e :
+                        pass
         #self.viz_trial_diff()
         for key in self.data:
             #print(key)
