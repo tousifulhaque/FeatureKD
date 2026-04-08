@@ -25,7 +25,14 @@ class SimpleCNN(nn.Module):
         
         
         self.dropout = nn.Dropout(dropout)
-        
+
+        # Transformer encoder after CNN
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=64, nhead=4, dim_feedforward=128,
+            dropout=dropout, batch_first=True
+        )
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=2)
+
         # Classifier
         self.fc = nn.Sequential(
             nn.Linear(64, 32),
@@ -37,27 +44,30 @@ class SimpleCNN(nn.Module):
     def forward(self, x, skl_data=None):
         # x: [B, T, C]
         x = x.permute(0, 2, 1)  # [B, C, T]
-        
+
         # Layer 1
         x = F.relu(self.bn1(self.conv1(x)))
         x = F.max_pool1d(x, 2)
-        
+
         # Layer 2
         x = F.relu(self.bn2(self.conv2(x)))
         x = F.max_pool1d(x, 2)
-        
+
         # Layer 3
         x = F.relu(self.bn3(self.conv3(x)))
         x = F.max_pool1d(x, 2)
-        
+
         # Layer 4
-        x = F.relu(self.bn4(self.conv4(x)))
-        
-        
+        x = F.relu(self.bn4(self.conv4(x)))  # [B, 64, T']
+
+        # Transformer encoder with skip connection
+        # x_t = x.permute(0, 2, 1)           # [B, T', 64]
+        # x_t = self.transformer(x_t)         # [B, T', 64]
+        # x = x + x_t.permute(0, 2, 1)       # skip connection [B, 64, T']
+
+        features = x.mean(dim=2)
+
         # Global average pooling
-        x = x.mean(dim=2)  # [B, C]
-        
-        x = self.dropout(x)
-        logits = self.fc(x)
-        
-        return logits, x  # logits and features
+        x = features  # [B, 64]
+        out = self.fc(x)
+        return out, features  # logits and features

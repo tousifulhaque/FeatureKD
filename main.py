@@ -11,6 +11,7 @@ import datetime
 import shutil
 import argparse
 import yaml
+import pickle
 from copy import deepcopy
 from collections import Counter
 #environmental import
@@ -321,6 +322,10 @@ class Trainer():
 
             self.norm_train, scalers = split_by_subjects(builder, self.train_subjects) 
             np.save("train_data.npy", self.norm_train)
+            # Save scalers to pickle file
+            with open(f'{self.arg.work_dir}/scalers_{self.test_subject[0]}.pkl', 'wb') as f:
+                pickle.dump(scalers, f)
+            
             self.norm_val, _ = split_by_subjects(builder , self.val_subject, scalers)        
             if self.has_empty_value(list(self.norm_val.values())):
                 return False
@@ -582,7 +587,7 @@ class Trainer():
             self.test_recall = recall
             self.test_auc = auc_score
             self.test_cm = confusion_matrix(label_list, pred_list)
-            self.print_log('{} Loss: {:4f}. {} Acc: {:2f}% F1 score: {:2f}%, Precision: {:2f}%, Recall: {:2f}%, AUC: {:2f}%'.format(loader_name.capitalize(),loss,loader_name.capitalize(), accuracy, f1, precision, recall, auc_score))
+            self.print_log('{} Loss: {:4f}. {} Acc: {:2f}% F1 score: {:2f}%, Precision: {:2f}%, Recall: {:2f}%'.format(loader_name.capitalize(), loss, loader_name.capitalize(), accuracy, f1, precision, recall))
         return loss       
 
     def start(self):

@@ -363,7 +363,7 @@ def split_by_subjects(builder = None, subjects = None, scalers = None) -> Dict[s
     #     builder.random_resampling()
     norm_data, scalers = normalization(data=builder.data, scalers = scalers)
     #norm_data = builder.data
-    return norm_data, scalers
+    return builder.data, scalers
 
 if __name__ == "__main__":
     dataset = SmartFallMM(root_dir=os.path.join(os.getcwd(), 'data/smartfallmm'))

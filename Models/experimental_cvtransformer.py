@@ -180,9 +180,10 @@ class MMTransformer(nn.Module):
         x = self.Spatial_encoder(x)
         #x = self.transform(x)
         x = rearrange(x, 'b e f -> b f e')
+        feature = x
 
-        for idx, block in enumerate(self.joint_block):
-            x = block(x)
+        #for idx, block in enumerate(self.joint_block):
+            #x = block(x)
     
             #     #feature = rearrange(feature, 'b j f -> b f j')
             #     feature = self.Temporal_norm(feature)
@@ -203,11 +204,11 @@ class MMTransformer(nn.Module):
         # print(f'Class token {cls_token.shape}')
         # temp_cls_token = self.proj_up_clstoken(cls_token) # in b x mocap_frames * se -> #out: b x num_joints*Se
         # temp_cls_token = torch.unsqueeze(temp_cls_token, dim = 1) #in: B x 1 x num_joints*Se)
-        x , feature = self.Temp_forward_features(x) #in: B x mocap_frames x ()
+        #x , feature = self.Temp_forward_features(x) #in: B x mocap_frames x ()
         #feature = rearrange(feature, 'b c f -> b f c')
         #x = x + sx 
         #x = sx
-        logits = self.class_head(x)
+        logits = self.class_head(x.mean(dim=1))
         return logits, feature
 
 

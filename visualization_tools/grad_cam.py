@@ -17,9 +17,56 @@ import matplotlib.cm as cm
 from matplotlib.colors import Normalize
 from argparse import ArgumentParser
 import yaml
+import pickle
 
 from Models.fusionTransformer import SingleStreamTransformer
 from Models.cnn import SimpleCNN
+
+
+def preprocess_data(data, scalers_path):
+    """
+    Preprocesses data by:
+    1. Keeping only first 96 elements of the second axis: (2541, 128, 3) -> (2541, 96, 3)
+    2. Reshaping to split into chunks: (2541, 96, 3) -> (5082, 48, 3)
+    3. Loading scalers and applying StandardScaler from 'accelerometer' key
+    
+    Args:
+        data: Input data array of shape (2541, 128, 3)
+        scalers_path: Path to the scalers pkl file
+    
+    Returns:
+        scaled_data: Preprocessed and scaled data of shape (5082, 48, 3)
+    """
+    # Step 1: Keep only first 96 elements of second axis
+    data = data[:, :96, :]  # Shape: (2541, 96, 3)
+    print(f"After trimming to 96: {data.shape}")
+    
+    # Step 2: Reshape to (5082, 48, 3) by splitting each sample
+    # Each of 2541 samples of length 96 becomes 2 samples of length 48
+    num_samples, seq_len, num_features = data.shape
+    reshaped_data = data.reshape(num_samples * 2, seq_len // 2, num_features)
+    print(f"After reshaping to chunks of 48: {reshaped_data.shape}")
+    
+    # Step 3: Load scalers and apply StandardScaler
+    with open(scalers_path, 'rb') as f:
+        scalers = pickle.load(f)
+    
+    # Get the accelerometer scaler
+    scaler = scalers['accelerometer']
+    print(f"Loaded scaler: {type(scaler).__name__}")
+    
+    # Reshape data for scaling: (5082, 48, 3) -> (5082*48, 3)
+    original_shape = reshaped_data.shape
+    flattened_data = reshaped_data.reshape(-1, num_features)
+    
+    # Apply scaler
+    scaled_data_flattened = scaler.transform(flattened_data)
+    
+    # Reshape back to (5082, 48, 3)
+    scaled_data = scaled_data_flattened.reshape(original_shape)
+    print(f"After scaling: {scaled_data.shape}")
+    
+    return scaled_data
 
 
 class TemporalGradCAM:
@@ -323,7 +370,7 @@ def plot_gradcam_overlay(time_series, cam, sample_idx=0, true_label=None,
 
 def visualization_gradcam(dataset, labels, model, feature_names=None,
                           cmap='Reds', output_dir='output_gradcam',
-                          method='grad_cam', filter='all'):
+                          method='grad_cam', filter='all', target_class=None):
     """
     Generate Grad-CAM visualizations for all samples.
 
@@ -336,6 +383,7 @@ def visualization_gradcam(dataset, labels, model, feature_names=None,
         output_dir: Output directory
         method: 'grad_cam' or 'gradient_x_input'
         filter: 'all', 'wrong' (only misclassified), or 'correct' (only correct)
+        target_class: 0 (ADL), 1 (Fall), or None (use predicted class)
     """
     os.makedirs(output_dir, exist_ok=True)
 
@@ -352,8 +400,13 @@ def visualization_gradcam(dataset, labels, model, feature_names=None,
         true_label = int(labels[i].item())
 
         # Compute Grad-CAM
-        cam, pred, prob = grad_cam.compute_cam(sample, method=method)
+        cam, pred, prob = grad_cam.compute_cam(sample, target_class=target_class, method=method)
         importance = cam[0].cpu().numpy()
+
+        # If target_class is specified, restrict to samples of that true class
+        if target_class is not None and true_label != target_class:
+            skipped += 1
+            continue
 
         # Apply filter
         is_correct = (pred == true_label)
@@ -456,14 +509,11 @@ def ablation_test(model, sample, cam, top_k_percent=10):
 
 
 if __name__ == "__main__":
-    # Paths
-    sub_id = 29
-    weights_path = f"exps/smartfall_fall_wokd/test_data/imu_all_participant_watch_round2_2026-03-24_15-58-52/ttfstudent_{sub_id}.pth"
-    data_path = f"data_np/test_{sub_id}.npy"
-    
     parser = ArgumentParser(description="Grad-CAM visualization for fall detection")
+    parser.add_argument('--sub-id', type=int, required=True,
+                        help='Subject ID used to locate weights/data and name output directory')
     parser.add_argument('--config', type=str, default='config/smartfallmm/test.yaml')
-    parser.add_argument('--method', type=str, default='grad_cam', 
+    parser.add_argument('--method', type=str, default='grad_cam',
                         choices=['grad_cam', 'gradient_x_input'],
                         help='Method for computing importance')
     parser.add_argument('--model-type', type=str, default='cnn',
@@ -471,8 +521,6 @@ if __name__ == "__main__":
                         help='Model type: cnn or transformer')
     parser.add_argument('--cmap', type=str, default='Reds',
                         help='Colormap (Reds, Greens, Blues, etc.)')
-    parser.add_argument('--output-dir', type=str, default=f'visualizations/output_gradcam_{sub_id}',
-                        help='Output directory for visualizations')
     parser.add_argument('--sample-idx', type=int, default=None,
                         help='Single sample index to visualize (default: all)')
     parser.add_argument('--ablation', action='store_true',
@@ -480,31 +528,44 @@ if __name__ == "__main__":
     parser.add_argument('--filter', type=str, default='wrong',
                         choices=['all', 'wrong', 'correct'],
                         help='Filter samples: all | wrong (misclassified only) | correct (correct only)')
+    parser.add_argument('--target-class', type=str, default=None,
+                        choices=['fall', 'adl'],
+                        help='Class to compute Grad-CAM for: fall (1) | adl (0) | omit for predicted class')
     args = parser.parse_args()
-    
+
+    target_class = {'fall': 1, 'adl': 0, None: None}[args.target_class]
+
+    sub_id = args.sub_id
+    weights_path = f"exps/smartfall_fall_wokd/test_data/imu_all_participant_watch_transformer/ttfstudent_{sub_id}.pth"
+    data_path = f"data_np/test_{sub_id}.npy"
+    output_dir = f'visualizations/output_gradcam_{sub_id}'
+
+    # Delete and recreate output directory
+    import shutil
+    if os.path.exists(output_dir):
+        shutil.rmtree(output_dir)
+    os.makedirs(output_dir)
+
     # Load config and model
     with open(args.config, 'r') as f:
         configs = yaml.safe_load(f)
-    
+
     # Load model based on type
     if args.model_type == 'transformer':
         model = SingleStreamTransformer(**configs['model_args'])
     else:
         model = SimpleCNN(**configs['model_args'])
-    
+
     model.load_state_dict(torch.load(weights_path, weights_only=True))
     model.eval()
-    
+
     # Load data
     data_dict = np.load(data_path, allow_pickle=True).item()
     data = torch.Tensor(data_dict['accelerometer'])
     labels = torch.Tensor(data_dict['labels'])
     imu_data = cal_smv(data)
-    
+
     print(f"Loaded {len(imu_data)} samples")
-    
-    # Create output directory
-    os.makedirs(args.output_dir, exist_ok=True)
     
     if args.sample_idx is not None:
         # Single sample visualization
@@ -512,7 +573,13 @@ if __name__ == "__main__":
         true_label = int(labels[args.sample_idx].item())
 
         grad_cam = TemporalGradCAM(model)
-        cam, pred, prob = grad_cam.compute_cam(sample, method=args.method)
+        cam, pred, prob = grad_cam.compute_cam(sample, target_class=target_class, method=args.method)
+
+        # If target_class is specified, restrict to samples of that true class
+        if target_class is not None and true_label != target_class:
+            class_str = 'Fall' if target_class == 1 else 'ADL'
+            print(f"Sample {args.sample_idx} is not a {class_str} sample — skipped (--target-class {args.target_class}).")
+            exit(0)
 
         is_correct = (pred == true_label)
         if args.filter == 'wrong' and is_correct:
@@ -531,7 +598,7 @@ if __name__ == "__main__":
             prob=prob,
             feature_names=['X', 'Y', 'Z', 'SMV'],
             cmap=args.cmap,
-            save_path=f'{args.output_dir}/GradCAM_sample_{args.sample_idx}.png'
+            save_path=f'{output_dir}/GradCAM_sample_{args.sample_idx}.png'
         )
         
         if args.ablation:
@@ -551,7 +618,8 @@ if __name__ == "__main__":
             model=model,
             feature_names=['X', 'Y', 'Z', 'SMV'],
             cmap=args.cmap,
-            output_dir=args.output_dir,
+            output_dir=output_dir,
             method=args.method,
-            filter=args.filter
+            filter=args.filter,
+            target_class=target_class
         )

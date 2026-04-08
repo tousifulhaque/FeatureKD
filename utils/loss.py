@@ -23,9 +23,8 @@ class DistillationLoss(nn.Module):
             ## -----------
             # soft features
             ## ------------
-            soft_teacher = nn.functional.softmax(teacher_features, dim=-1)
+            soft_teacher = nn.functional.softmax(teacher_features.mean(dim=1), dim=-1)
             soft_prob = nn.functional.log_softmax(student_features, dim=-1)
-
 
             ##---------
             # calculating weights

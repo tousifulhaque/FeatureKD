@@ -506,7 +506,7 @@ class DatasetBuilder:
                 # self.store_trial_diff(trial_difference)
                 if executed : 
                     try:
-                        #trial_data = align_sequence(trial_data)
+                        trial_data = align_sequence(trial_data)
                         trial_data = self.process(trial_data, label)
                         if self._len_check(trial_data):
                             self._add_trial_data(trial_data)
@@ -516,6 +516,7 @@ class DatasetBuilder:
         for key in self.data:
             #print(key)
             self.data[key] = np.concatenate(self.data[key], axis=0)
+            print(f'{key} -> {self.data[key].shape}')
     
     def normalization(self) -> np.ndarray:
         '''
